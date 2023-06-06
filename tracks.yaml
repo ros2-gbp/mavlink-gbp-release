@@ -170,10 +170,10 @@ tracks:
       :{release_inc} --os-name rhel
     devel_branch: master
     last_release: master
-    last_version: 2022.12.30
+    last_version: 2023.6.6
     name: upstream
     patches: patch
-    release_inc: '3'
+    release_inc: '1'
     release_repo_url: null
     release_tag: :{ask}
     ros_distro: iron

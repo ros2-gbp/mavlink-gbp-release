@@ -231,8 +231,7 @@ tracks:
     ros_distro: jazzy
     vcs_type: git
     vcs_uri: https://github.com/mavlink/mavlink.git
-    version: 2023.9.9
-    version_saved: :{ask}
+    version: :{ask}
   kinetic:
     actions:
     - bloom-export-upstream :{vcs_local_uri} :{vcs_type} --tag :{release_tag} --display-uri

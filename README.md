@@ -1,3 +1,26 @@
+## mavlink (jazzy) - 2024.6.6-1
+
+The packages in the `mavlink` repository were released into the `jazzy` distro by running `/usr/bin/bloom-release mavlink -r jazzy` on `Thu, 06 Jun 2024 13:35:12 -0000`
+
+The `mavlink` package was released.
+
+Version of package(s) in repository `mavlink`:
+
+- upstream repository: https://github.com/mavlink/mavlink.git
+- release repository: https://github.com/ros2-gbp/mavlink-gbp-release.git
+- rosdistro version: `2023.9.9-3`
+- old version: `2023.9.9-3`
+- new version: `2024.6.6-1`
+
+Versions of tools used:
+
+- bloom version: `0.12.0`
+- catkin_pkg version: `1.0.0`
+- rosdep version: `0.24.0`
+- rosdistro version: `0.9.1`
+- vcstools version: `0.1.42`
+
+
 ## mavlink (iron) - 2024.6.6-1
 
 The packages in the `mavlink` repository were released into the `iron` distro by running `/usr/bin/bloom-release mavlink -r iron` on `Thu, 06 Jun 2024 13:28:46 -0000`

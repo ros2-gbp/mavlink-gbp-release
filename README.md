@@ -1,3 +1,26 @@
+## mavlink (humble) - 2024.6.6-1
+
+The packages in the `mavlink` repository were released into the `humble` distro by running `/usr/bin/bloom-release mavlink -r humble` on `Thu, 06 Jun 2024 13:17:43 -0000`
+
+The `mavlink` package was released.
+
+Version of package(s) in repository `mavlink`:
+
+- upstream repository: https://github.com/mavlink/mavlink.git
+- release repository: https://github.com/ros2-gbp/mavlink-gbp-release.git
+- rosdistro version: `2024.3.3-1`
+- old version: `2024.3.3-1`
+- new version: `2024.6.6-1`
+
+Versions of tools used:
+
+- bloom version: `0.12.0`
+- catkin_pkg version: `1.0.0`
+- rosdep version: `0.24.0`
+- rosdistro version: `0.9.1`
+- vcstools version: `0.1.42`
+
+
 ## mavlink (rolling) - 2024.3.3-1
 
 The packages in the `mavlink` repository were released into the `rolling` distro by running `/usr/bin/bloom-release -r rolling mavlink` on `Sun, 03 Mar 2024 08:17:39 -0000`

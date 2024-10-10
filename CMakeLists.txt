@@ -42,7 +42,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/package.xml)
         "from xml.etree import ElementTree as ET\n"
         "doc = ET.parse('${CMAKE_SOURCE_DIR}/package.xml')\n"
         "ver = doc.find('version').text\n"
-        "if re.match('\\d+\\.\\d+\\.\\d+', ver):\n"
+        "if re.match(r'\\d+\\.\\d+\\.\\d+', ver):\n"
         "    sys.stdout.write(ver)\n"
         "else:\n"
         "    sys.stderr.write('Version format error.\\n')\n"

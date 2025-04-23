@@ -1,1 +1,1 @@
-{"base": "69a5be6f", "parent": "debian/rolling/mavlink", "previous": "1fd75786", "trim": "", "trimbase": ""}
+{"base": "20f350d0dc15", "parent": "debian/kilted/mavlink", "previous": "4e00032c65e5", "trim": "", "trimbase": ""}

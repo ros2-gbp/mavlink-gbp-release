@@ -251,7 +251,7 @@ tracks:
     last_version: 2024.10.10
     name: upstream
     patches: patch
-    release_inc: '1'
+    release_inc: '2'
     release_repo_url: null
     release_tag: master
     release_tag_saved: :{ask}

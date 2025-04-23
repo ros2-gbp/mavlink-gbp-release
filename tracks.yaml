@@ -253,8 +253,7 @@ tracks:
     patches: patch
     release_inc: '2'
     release_repo_url: null
-    release_tag: master
-    release_tag_saved: :{ask}
+    release_tag: :{ask}
     ros_distro: kilted
     vcs_type: git
     vcs_uri: https://github.com/mavlink/mavlink.git

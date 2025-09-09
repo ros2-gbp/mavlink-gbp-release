@@ -1,3 +1,26 @@
+## mavlink (rolling) - 2025.9.9-1
+
+The packages in the `mavlink` repository were released into the `rolling` distro by running `/usr/bin/bloom-release mavlink -r rolling` on `Tue, 09 Sep 2025 10:28:03 -0000`
+
+The `mavlink` package was released.
+
+Version of package(s) in repository `mavlink`:
+
+- upstream repository: https://github.com/mavlink/mavlink.git
+- release repository: https://github.com/ros2-gbp/mavlink-gbp-release.git
+- rosdistro version: `2025.6.6-1`
+- old version: `2025.6.6-1`
+- new version: `2025.9.9-1`
+
+Versions of tools used:
+
+- bloom version: `0.13.0`
+- catkin_pkg version: `1.0.0`
+- rosdep version: `0.26.0`
+- rosdistro version: `1.0.1`
+- vcstools version: `0.1.42`
+
+
 ## mavlink (kilted) - 2025.9.9-1
 
 The packages in the `mavlink` repository were released into the `kilted` distro by running `/usr/bin/bloom-release mavlink -r kilted` on `Tue, 09 Sep 2025 07:25:19 -0000`

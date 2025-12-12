@@ -97,7 +97,7 @@ tracks:
       :{release_inc} --os-name rhel
     devel_branch: master
     last_release: master
-    last_version: 2025.9.9
+    last_version: 2025.12.12
     name: upstream
     patches: patch
     release_inc: '1'

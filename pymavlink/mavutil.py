@@ -13,6 +13,7 @@ import json
 import re
 import platform
 from pymavlink import mavexpression
+import ssl
 
 # We want to re-export x25crc here
 from pymavlink.generator.mavcrc import x25crc as x25crc
@@ -375,7 +376,6 @@ class mavfile(object):
             return
         msg._posted = True
         msg._timestamp = time.time()
-        type = msg.get_type()
 
         if 'usec' in msg.__dict__:
             self.uptime = msg.usec * 1.0e-6
@@ -398,12 +398,14 @@ class mavfile(object):
             # we've seen a new system
             self.sysid_state[src_system] = mavfile_state()
 
-        add_message(self.sysid_state[src_system].messages, type, msg)
+        m_type = msg.get_type()
+
+        add_message(self.sysid_state[src_system].messages, m_type, msg)
 
         if src_tuple == radio_tuple:
             # as a special case radio msgs are added for all sysids
             for s in self.sysid_state.keys():
-                self.sysid_state[s].messages[type] = msg
+                self.sysid_state[s].messages[m_type] = msg
 
         if not (src_tuple == radio_tuple or msg.get_msgId() < 0):
             # Don't use unknown messages to calculate number of lost packets
@@ -421,7 +423,7 @@ class mavfile(object):
             self.mav_count += 1
         
         self.timestamp = msg._timestamp
-        if type == 'HEARTBEAT' and self.probably_vehicle_heartbeat(msg):
+        if m_type == 'HEARTBEAT' and self.probably_vehicle_heartbeat(msg):
             if self.sysid == 0:
                 # lock onto id tuple of first vehicle heartbeat
                 self.sysid = src_system
@@ -430,7 +432,7 @@ class mavfile(object):
                 self.sysid_state[src_system].armed = (msg.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
                 self.sysid_state[src_system].mav_type = msg.type
                 self.sysid_state[src_system].mav_autopilot = msg.autopilot
-        elif type == 'HIGH_LATENCY2':
+        elif m_type == 'HIGH_LATENCY2':
             if self.sysid == 0:
                 # lock onto id tuple of first vehicle heartbeat
                 self.sysid = src_system
@@ -441,16 +443,16 @@ class mavfile(object):
             self.sysid_state[src_system].mav_type = msg.type
             self.sysid_state[src_system].mav_autopilot = msg.autopilot
 
-        elif type == 'PARAM_VALUE':
+        elif m_type == 'PARAM_VALUE':
             if not src_tuple in self.param_state:
                 self.param_state[src_tuple] = param_state()
             self.param_state[src_tuple].params[msg.param_id] = msg.param_value
-        elif type == 'SYS_STATUS' and mavlink.WIRE_PROTOCOL_VERSION == '0.9':
+        elif m_type == 'SYS_STATUS' and mavlink.WIRE_PROTOCOL_VERSION == '0.9':
             self.sysid_state[src_system].flightmode = mode_string_v09(msg)
-        elif type == 'GPS_RAW':
+        elif m_type == 'GPS_RAW':
             if self.sysid_state[src_system].messages['HOME'].fix_type < 2:
                 self.sysid_state[src_system].messages['HOME'] = msg
-        elif type == 'GPS_RAW_INT':
+        elif m_type == 'GPS_RAW_INT':
             if self.sysid_state[src_system].messages['HOME'].fix_type < 3:
                 self.sysid_state[src_system].messages['HOME'] = msg
         for hook in self.message_hooks:
@@ -1853,8 +1855,9 @@ class mavwebsocket(mavfile):
                 self.close_port()
             pass
 
+
 class mavwebsocket_client(mavfile):
-    '''client using WebSocket over TCP'''
+    '''client using WebSocket over TCP with WS and WSS support'''
     def __init__(self,
                  device,
                  source_system=255,
@@ -1863,15 +1866,19 @@ class mavwebsocket_client(mavfile):
                  use_native=default_native):
         self.resource = "/"
         a = device.split(':')
-        if len(a) < 2:
-            raise ValueError("TCP ports must be specified as host:port")
-        self.host = a[0]
-        self.port = int(a[1])
-        if len(a) > 2:
-            self.resource = a[2]
+        protocol = a[0]
+        if len(a) < 3:
+            raise ValueError("WebSocket ports must be specified as protocol:host:port")
+        self.host = a[1]
+        self.host_port = int(a[2])
+        if len(a) > 3:
+            self.resource = a[3]
         self.sock = None
+        self.use_ssl = protocol.lower() == 'wss'
+        self.port = FakeSerial()
         self.connect()
-        mavfile.__init__(self, self.sock.fileno(), "ws:" + device, source_system=source_system, source_component=source_component, use_native=use_native)
+        fd = self.sock.fileno() if self.sock is not None else None
+        mavfile.__init__(self, fd, device, source_system=source_system, source_component=source_component, use_native=use_native)
 
     def connect(self):
         self.close()
@@ -1883,20 +1890,46 @@ class mavwebsocket_client(mavfile):
             BytesMessage,
         )
         try:
-            self.sock = socket.create_connection((self.host, self.port))
+            # Create basic socket connection
+            raw_sock = socket.create_connection((self.host, self.host_port))
+            
+            # Wrap with SSL if using WSS
+            if self.use_ssl:
+                context = ssl.create_default_context()
+                # Optional: For testing with self-signed certificates, uncomment:
+                # context.check_hostname = False
+                # context.verify_mode = ssl.CERT_NONE
+                self.sock = context.wrap_socket(raw_sock, server_hostname=self.host)
+            else:
+                self.sock = raw_sock
+            self.port = self.sock
+
         except socket.error as e:
-            if e.errno in [ errno.ECONNREFUSED, errno.EHOSTUNREACH ]:
+            if e.errno in [errno.ECONNREFUSED, errno.EHOSTUNREACH]:
+                self.close()
                 return
             raise
+        except ssl.SSLError as e:
+            print(f"SSL Error: {e}")
+            self.close()
+            raise
+
+        self.fd = self.sock.fileno()
         self.sock.setblocking(1)
         self.ws = WSConnection(ConnectionType.CLIENT)
         b = self.ws.send(Request(host=self.host, target=self.resource))
         self.sock.send(b)
         self.buffer = b''
-
+        
         # wait for handshake response
         while True:
-            data = self.sock.recv(4096)
+            try:
+                data = self.sock.recv(4096)
+            except ssl.SSLError as e:
+                raise RuntimeError(f"WebSocket SSL handshake failed: {e}")
+            except socket.error as e:
+                raise RuntimeError(f"WebSocket handshake failed: {e}")
+                
             if not data:
                 raise RuntimeError("WebSocket handshake failed")
             self.ws.receive_data(data)
@@ -1905,7 +1938,7 @@ class mavwebsocket_client(mavfile):
                     self.sock.setblocking(0)
                     return
 
-    def recv(self,n=None):
+    def recv(self, n=None):
         from wsproto.events import (
             BytesMessage,
             CloseConnection
@@ -1916,12 +1949,26 @@ class mavwebsocket_client(mavfile):
         if self.buffer:
             out, self.buffer = self.buffer, b''
             return out
+        if n is None:
+            n = self.mav.bytes_needed()
         try:
             data = self.sock.recv(n)
-        except socket.error as e:
-            if e.errno in [ errno.EAGAIN, errno.EWOULDBLOCK ]:
+        except ssl.SSLError as e:
+            # Handle SSL-specific errors
+            if e.errno == ssl.SSL_ERROR_WANT_READ:
+                return b""  # Need more data, try again later
+            elif e.errno == ssl.SSL_ERROR_WANT_WRITE:
+                return b""  # SSL needs to write, try again later
+            elif e.errno in [errno.EAGAIN, errno.EWOULDBLOCK]:
                 return b""
-            if e.errno in [ errno.ECONNRESET, errno.EPIPE ]:
+            else:
+                # Real SSL error, reconnect
+                self.connect()
+                return b''
+        except socket.error as e:
+            if e.errno in [errno.EAGAIN, errno.EWOULDBLOCK]:
+                return b""
+            if e.errno in [errno.ECONNRESET, errno.EPIPE]:
                 self.connect()
                 return b''
             raise
@@ -1944,8 +1991,17 @@ class mavwebsocket_client(mavfile):
         b = self.ws.send(BytesMessage(data=data))
         try:
             self.sock.send(b)
+        except ssl.SSLError as e:
+            # Handle SSL-specific errors
+            if e.errno == ssl.SSL_ERROR_WANT_READ:
+                return  # SSL needs to read, try again later
+            elif e.errno == ssl.SSL_ERROR_WANT_WRITE:
+                return  # SSL needs to write, try again later
+            else:
+                # Real SSL error, reconnect
+                self.connect()
         except socket.error as e:
-            if e.errno in [ errno.EPIPE ]:
+            if e.errno in [errno.EPIPE]:
                 self.connect()
             pass
 
@@ -1953,7 +2009,10 @@ class mavwebsocket_client(mavfile):
         if self.sock:
             self.sock.close()
             self.sock = None
-        
+            self.port = FakeSerial()
+        self.fd = None
+
+
 def mavlink_connection(device, baud=115200, source_system=255, source_component=0,
                        planner_format=None, write=False, append=False,
                        robust_parsing=True, notimestamps=False, input=True,
@@ -1987,8 +2046,8 @@ def mavlink_connection(device, baud=115200, source_system=255, source_component=
         return mavudp(device[9:], input=False, source_system=source_system, source_component=source_component, use_native=use_native, broadcast=True)
     if device.startswith('wsserver:'):
         return mavwebsocket(device[9:], source_system=source_system, source_component=source_component, use_native=use_native)
-    if device.startswith('ws:'):
-        return mavwebsocket_client(device[3:], source_system=source_system, source_component=source_component, use_native=use_native)
+    if device.startswith('ws:') or device.startswith('wss:'):
+        return mavwebsocket_client(device, source_system=source_system, source_component=source_component, use_native=use_native)
     # For legacy purposes we accept the following syntax and let the caller to specify direction
     if device.startswith('udp:'):
         return mavudp(device[4:], input=input, source_system=source_system, source_component=source_component, use_native=use_native)
@@ -2277,6 +2336,8 @@ mode_mapping_acm = {
     25 : 'SYSTEMID',
     26 : 'AUTOROTATE',
     27 : 'AUTO_RTL',
+    28 : 'TURTLE',
+    29 : 'RATE_ACRO',
 }
 
 mode_mapping_rover = {

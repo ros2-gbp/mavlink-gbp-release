@@ -117,25 +117,11 @@
     <!-- ALL the entries in the MAV_CMD enum have a maximum of 7 parameters -->
     <enum name="MAV_CMD">
       <description>Commands to be executed by the MAV. They can be executed on user request, or as part of a mission script. If the action is used in a mission, the parameter mapping to the waypoint/mission message is as follows: Param 1, Param 2, Param 3, Param 4, X: Param 5, Y:Param 6, Z:Param 7. This command list is similar what ARINC 424 is for commercial aircraft: A data format how to interpret waypoint/mission data. NaN and INT32_MAX may be used in float/integer params (respectively) to indicate optional/default values (e.g. to use the component's current yaw or latitude rather than a specific value). See https://mavlink.io/en/guide/xml_schema.html#MAV_CMD for information about the structure of the MAV_CMD entries</description>
-      <entry value="247" name="MAV_CMD_DO_UPGRADE" hasLocation="false" isDestination="false">
-        <description>Request a target system to start an upgrade of one (or all) of its components.
-          For example, the command might be sent to a companion computer to cause it to upgrade a connected flight controller.
-          The system doing the upgrade will report progress using the normal command protocol sequence for a long running operation.
-          Command protocol information: https://mavlink.io/en/services/command.html.</description>
-        <param index="1" label="Component ID" enum="MAV_COMPONENT">Component id of the component to be upgraded. If set to 0, all components should be upgraded.</param>
-        <param index="2" label="Reboot" minValue="0" maxValue="1" increment="1">0: Do not reboot component after the action is executed, 1: Reboot component after the action is executed.</param>
-        <param index="3">Reserved</param>
-        <param index="4">Reserved</param>
-        <param index="5">Reserved</param>
-        <param index="6">Reserved</param>
-        <param index="7">WIP: upgrade progress report rate (can be used for more granular control).</param>
-      </entry>
       <entry value="309" name="MAV_CMD_ACTUATOR_GROUP_TEST" hasLocation="false" isDestination="false">
         <description>Command to test groups of related actuators together.
           This might include groups such as the actuators that contribute to roll, pitch, or yaw torque, actuators that contribute to thrust in x, y, z axis, tilt mechanisms, flaps and spoilers, and so on.
           This is similar to MAV_CMD_ACTUATOR_TEST, except that multiple actuators may be affected.
           Different groups may also affect the same actuators (as in the case of controls that affect torque in different axes).
-          Autopilots must NACK this command with MAV_RESULT_TEMPORARILY_REJECTED while armed.
         </description>
         <param index="1" label="Group" enum="ACTUATOR_TEST_GROUP">Actuator group to check, such as actuators related to roll torque.</param>
         <param index="2" label="Value" minValue="-1" maxValue="1">Value to set. This is a normalized value across the full range of the tested group [-1,1].</param>
@@ -149,7 +135,6 @@
         <param index="1" label="System ID" minValue="1" maxValue="255" increment="1">New system ID for target component(s). 0: ignore and reject command (broadcast system ID not allowed).</param>
         <param index="2" label="Component ID" minValue="0" maxValue="255" increment="1">New component ID for target component(s). 0: ignore (component IDs don't change).</param>
         <param index="3" label="Reboot">Reboot components after ID change. Any non-zero value triggers the reboot.</param>
-        <param index="4" reserved="true" default="NaN"/>
       </entry>
       <entry value="611" name="MAV_CMD_DO_SET_GLOBAL_ORIGIN" hasLocation="true" isDestination="false">
         <description>Sets the GNSS coordinates of the vehicle local origin (0,0,0) position.
@@ -158,10 +143,6 @@
           This command supersedes SET_GPS_GLOBAL_ORIGIN.
           Should be sent in a COMMAND_INT (Expected frame is MAV_FRAME_GLOBAL, and this should be assumed when sent in COMMAND_LONG).
         </description>
-        <param index="1">Empty</param>
-        <param index="2">Empty</param>
-        <param index="3">Empty</param>
-        <param index="4">Empty</param>
         <param index="5" label="Latitude">Latitude</param>
         <param index="6" label="Longitude">Longitude</param>
         <param index="7" label="Altitude" units="m">Altitude</param>
@@ -193,13 +174,6 @@
           See https://mavlink.io/en/services/opendroneid.html for more information.
         </description>
         <param index="1" label="Number" minValue="0" increment="1">Set/unset emergency 0: unset, 1: set</param>
-        <param index="2" reserved="true" default="NaN"/>
-        <param index="3" reserved="true" default="NaN"/>
-        <param index="4">Empty</param>
-        <param index="5">Empty</param>
-        <param index="5">Empty</param>
-        <param index="6">Empty</param>
-        <param index="7">Empty</param>
       </entry>
       <entry value="43004" name="MAV_CMD_EXTERNAL_WIND_ESTIMATE" hasLocation="false" isDestination="false">
         <description>Set an external estimate of wind direction and speed.
@@ -209,9 +183,6 @@
         <param index="2" label="Wind speed accuracy" units="m/s">Estimated 1 sigma accuracy of wind speed. Set to NaN if unknown.</param>
         <param index="3" label="Direction" units="deg" minValue="0" maxValue="360">Azimuth (relative to true north) from where the wind is blowing.</param>
         <param index="4" label="Direction accuracy" units="deg">Estimated 1 sigma accuracy of wind direction. Set to NaN if unknown.</param>
-        <param index="5">Empty</param>
-        <param index="6">Empty</param>
-        <param index="7">Empty</param>
       </entry>
       <entry value="43006" name="MAV_CMD_ESTIMATOR_SENSOR_ENABLE" hasLocation="false" isDestination="false">
         <description>Enable or disable a specific estimator sensor fusion source at runtime.
@@ -221,9 +192,6 @@
         <param index="2" label="Instance" minValue="0" increment="1">Sensor instance (0-based, for multi-instance).</param>
         <param index="3" label="Enable" enum="MAV_BOOL">Enable (1) or Disable (0) the source.</param>
         <param index="4" label="Estimator Instance" default="NaN" minValue="0" increment="1">Estimator instance (0-based, for systems with multiple estimators).</param>
-        <param index="5">Empty</param>
-        <param index="6">Empty</param>
-        <param index="7">Empty</param>
       </entry>
       <entry value="620" name="MAV_CMD_EXTERNAL_ATTITUDE_ESTIMATE" hasLocation="false" isDestination="false">
         <description>Set an external estimate of vehicle attitude.
@@ -233,8 +201,6 @@
         <param index="2" label="Pitch" units="deg" minValue="0" maxValue="360">Pitch angle. Set to NaN if unknown.</param>
         <param index="3" label="Yaw" units="deg" minValue="0" maxValue="360">Yaw/heading (relative to true north) angle. Set to NaN if unknown.</param>
         <param index="4" label="Tilt accuracy" units="deg">Estimated 1 sigma accuracy of roll and pitch angles. Set to NaN if unknown.</param>
-        <param index="5">Empty</param>
-        <param index="6">Empty</param>
         <param index="7" label="Yaw accuracy" units="deg">Estimated 1 sigma accuracy of yaw angle. Set to NaN if unknown.</param>
       </entry>
       <entry value="32100" name="MAV_CMD_REQUEST_OPERATOR_CONTROL" hasLocation="false" isDestination="false">
@@ -283,8 +249,6 @@
         <param index="3" label="Request timeout" units="s" minValue="3" maxValue="60">Timeout in seconds before a request to a GCS to allow takeover is assumed to be rejected. This is used to display the timeout graphically on requester and GCS in control.</param>
         <param index="4" label="GCS Sysid">System ID of GCS requesting control. For a range of GCS in control, this the minimum id (and the sender system ID may be anywhere in the range).</param>
         <param index="5" label="GCS Sysid (upper range)">Upper range of controlling GCS system IDs. 0 for single-GCS control. If non-zero the sender system ID may be anywhere in the range).</param>
-        <param index="6">Empty</param>
-        <param index="7">Empty</param>
       </entry>
     </enum>
     <enum name="GCS_CONTROL_STATUS_FLAGS" bitmask="true">
@@ -432,6 +396,15 @@
       <entry value="3" name="ACTUATOR_TEST_GROUP_COLLECTIVE_TILT">
         <description>Actuators that affect collective tilt.</description>
       </entry>
+      <entry value="4" name="ACTUATOR_TEST_GROUP_X_THRUST">
+        <description>Actuators that contribute to x (longitudinal, positive = forward) thrust.</description>
+      </entry>
+      <entry value="5" name="ACTUATOR_TEST_GROUP_Y_THRUST">
+        <description>Actuators that contribute to y (lateral, positive = right) thrust.</description>
+      </entry>
+      <entry value="6" name="ACTUATOR_TEST_GROUP_Z_THRUST">
+        <description>Actuators that contribute to z (vertical, positive = down) thrust.</description>
+      </entry>
     </enum>
     <enum name="ESC_FIRMWARE">
       <description>ESC firmware type identifier.</description>
@@ -529,7 +502,7 @@
       <field type="float" name="current" units="A" invalid="NaN">Battery current (through all cells/loads). Positive value when discharging and negative if charging. NaN: field not provided.</field>
       <field type="float" name="capacity_consumed" units="Ah" invalid="NaN">Consumed charge. NaN: field not provided. This is either the consumption since power-on or since the battery was full, depending on the value of MAV_BATTERY_STATUS_FLAGS_CAPACITY_RELATIVE_TO_FULL.</field>
       <field type="float" name="capacity_remaining" units="Ah" invalid="NaN">Remaining charge (until empty). NaN: field not provided. Note: If MAV_BATTERY_STATUS_FLAGS_CAPACITY_RELATIVE_TO_FULL is unset, this value is based on the assumption the battery was full when the system was powered.</field>
-      <field type="uint8_t" name="percent_remaining" units="%" invalid="UINT8_MAX">Remaining battery energy. Values: [0-100], UINT8_MAX: field not provided.</field>
+      <field type="float" name="state_of_charge" units="%" invalid="NaN">State of Charge (SoC). Remaining capacity relative to current fully-charged capacity as a percentage. Values: [0-100], NaN: field not provided. Note that the value may be calculated from design_capacity if current full_charge_capacity is not known (see BATTERY_INFO).</field>
       <field type="uint32_t" name="status_flags" enum="MAV_BATTERY_STATUS_FLAGS">Fault, health, readiness, and other status indications.</field>
     </message>
     <message id="414" name="GROUP_START">

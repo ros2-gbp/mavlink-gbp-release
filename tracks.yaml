@@ -418,10 +418,10 @@ tracks:
       -i :{release_inc} --require-os fedora rhel
     devel_branch: master
     last_release: master
-    last_version: 2026.3.3
+    last_version: 2026.6.6
     name: upstream
     patches: patch
-    release_inc: '2'
+    release_inc: '1'
     release_repo_url: git@github.com:ros2-gbp/mavlink-gbp-release.git
     release_tag: :{ask}
     ros_distro: rolling

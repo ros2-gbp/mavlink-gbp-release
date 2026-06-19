@@ -335,7 +335,7 @@ tracks:
       -i :{release_inc} --require-os fedora rhel
     devel_branch: master
     last_release: master
-    last_version: 2026.6.6
+    last_version: 2026.6.19
     name: upstream
     patches: patch
     release_inc: '1'

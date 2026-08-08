@@ -50,6 +50,26 @@ Using pip you can install the required dependencies for pymavlink :
 sudo python3 -m pip install --upgrade lxml
 ```
 
+### On macOS
+
+lxml's native dependencies (libxml2 and libxslt) can be installed with [Homebrew](https://brew.sh) :
+
+```bash
+brew install libxml2 libxslt
+```
+
+Install the Python dependencies with pip so they land in the same Python environment as pymavlink (Homebrew's `numpy`/`pytest` install into Homebrew's own Python interpreter, which is typically not the one running pymavlink) :
+
+```bash
+python3 -m pip install --upgrade lxml
+```
+
+Optional for FFT scripts and tests:
+
+```bash
+python3 -m pip install --upgrade numpy pytest
+```
+
 ### On Windows
 
 Lxml can be installed with a Windows installer from here : https://pypi.org/project/lxml
@@ -74,7 +94,8 @@ Starting from September 2022, mavnative, a C extension for parsing mavlink, was 
 From the pymavlink directory, you can use :
 
 ```bash
-sudo MDEF=PATH_TO_message_definitions python3 -m pip install . -v
+(cd ..; git clone https://github.com/ArduPilot/mavlink.git)
+MDEF=$PWD/../mavlink/message_definitions python3 -m pip install . -v
 ```
 
 Since pip installation is executed from /tmp, it is necessary to point to the directory containing message definitions with MDEF. MDEF should not be set to any particular message version directory but the parent folder instead. If you have cloned from mavlink/mavlink then this is ```/mavlink/message_definitions``` . Using pip should auto install dependencies and allow you to keep them up-to-date. 
@@ -82,8 +103,23 @@ Since pip installation is executed from /tmp, it is necessary to point to the di
 Or:
 
 ```bash
-sudo python3 setup.py install
+python3 -m pip install .
 ```
+
+## Running the tests
+
+From inside the pymavlink directory, fetch the message definitions alongside
+the checkout and run the suite with `pytest`:
+
+```bash
+(cd ..; git clone https://github.com/ArduPilot/mavlink.git)
+MDEF=$PWD/../mavlink/message_definitions PYTHONPATH=.. python3 -m pytest
+```
+
+`MDEF` points at the message definitions used to generate the dialects; if you
+already have an ArduPilot checkout, point it at that `mavlink/message_definitions`
+instead. `PYTHONPATH=..` imports the local checkout rather than a pip-installed
+copy.
 
 ### Ardupilot Custom Modes
 

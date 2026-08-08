@@ -42,7 +42,7 @@ if (isNode) {
     jspack = (global && global.jspack) || require("jspack").jspack;
 } else {
     import("./local_modules/jspack/jspack.js").then((mod) => {
-	jspack = new mod.default()
+        jspack = new mod.default()
     }).catch((e) => {
     });
 }
@@ -814,20 +814,20 @@ ${MAVPROCESSOR}.prototype.check_signature = function(msgbuf, srcSystem, srcCompo
     stream_key = new Array(link_id,srcSystem,srcComponent).toString();
 
     if (stream_key in this.signing.stream_timestamps){
-	if (timestamp <= this.signing.stream_timestamps[stream_key]){
-	    //# reject old timestamp
-	    //console.log('old timestamp')
-	    return false
-	}
+        if (timestamp <= this.signing.stream_timestamps[stream_key]){
+            //# reject old timestamp
+            //console.log('old timestamp')
+            return false
+        }
     }else{
-	//# a new stream has appeared. Accept the timestamp if it is at most
-	//# one minute behind our current timestamp
+        //# a new stream has appeared. Accept the timestamp if it is at most
+        //# one minute behind our current timestamp
     if (timestamp + 6000*1000 < this.signing.timestamp){
-	    //console.log('bad new stream ', timestamp/(100.0*1000*60*60*24*365), this.signing.timestamp/(100.0*1000*60*60*24*365))
-	    return false
-	}
-	this.signing.stream_timestamps[stream_key] = timestamp;
-	//console.log('new stream',this.signing.stream_timestamps)
+            //console.log('bad new stream ', timestamp/(100.0*1000*60*60*24*365), this.signing.timestamp/(100.0*1000*60*60*24*365))
+            return false
+        }
+        this.signing.stream_timestamps[stream_key] = timestamp;
+        //console.log('new stream',this.signing.stream_timestamps)
     }
 
     // just the last 6 of 13 available are the actual sig . ie excluding the linkid(1) and timestamp(6)
@@ -1367,7 +1367,7 @@ def generate(basename, xml):
 
 
     print("Generating %s" % filename)
-    outf = open(filename, "w")
+    outf = open(filename, "w", encoding='utf-8')
     generate_preamble(outf, msgs, filelist, xml[0])
     generate_enums(outf, enums, xml[0])
     generate_message_ids(outf, msgs, xml[0])
@@ -1379,7 +1379,7 @@ def generate(basename, xml):
 
     testfilename = filename.replace('.js','.tests.js')
     print("Generating TESTS %s" % testfilename)
-    outf = open(testfilename, "w")
+    outf = open(testfilename, "w", encoding='utf-8')
     generate_tests_preamble(outf, msgs, filelist, xml[0])
     generate_tests_mavlink_class(outf, msgs, xml[0])
     generate_tests_footer(outf, xml[0])

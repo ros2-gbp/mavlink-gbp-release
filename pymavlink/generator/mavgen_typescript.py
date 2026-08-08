@@ -9,6 +9,7 @@ import os
 from . import mavtemplate
 
 t = mavtemplate.MAVTemplate()
+NODE_MAVLINK_PACKAGE = "@ifrunistuttgart/node-mavlink"
 
 
 def camelcase(str):
@@ -28,7 +29,7 @@ def generate_enums(dir, enums):
     for e in enums:
         filename = e.name.replace('_', '-')
         filename = filename.lower()
-        with open('{}/{}.ts'.format(dir, filename), "w") as f:
+        with open('{}/{}.ts'.format(dir, filename), "w", encoding='utf-8') as f:
             f.write("export enum {} {{\n".format(camelcase(e.name)))
             for entry in e.entry:
                 f.write(
@@ -46,8 +47,8 @@ def generate_classes(dir, registry, msgs, xml):
     if not os.path.isdir(dir):
         os.mkdir(dir)
 
-    with open(registry, "w") as registry_f:
-        registry_f.write("import {MAVLinkMessage} from 'node-mavlink';\n")
+    with open(registry, "w", encoding='utf-8') as registry_f:
+        registry_f.write(f"import {{MAVLinkMessage}} from '{NODE_MAVLINK_PACKAGE}';\n")
         for m in msgs:
             filename = m.name.replace('_', '-')
             filename = filename.lower()
@@ -56,12 +57,12 @@ def generate_classes(dir, registry, msgs, xml):
             for i in range(0, len(m.fieldnames)):
                 m.order_map[i] = m.ordered_fieldnames.index(m.fieldnames[i])
 
-            with open('{}/{}.ts'.format(dir, filename), "w") as f:
+            with open('{}/{}.ts'.format(dir, filename), "w", encoding='utf-8') as f:
                 if xml.wire_protocol_version == '1.0':
                     raise Exception('WireProtocolException', 'Please use WireProtocol = 2.0 only.')
 
-                f.write("import {MAVLinkMessage} from 'node-mavlink';\n")
-                f.write("import {readInt64LE, readUInt64LE} from 'node-mavlink';\n")
+                f.write(f"import {{MAVLinkMessage}} from '{NODE_MAVLINK_PACKAGE}';\n")
+                f.write(f"import {{readInt64LE, readUInt64LE}} from '{NODE_MAVLINK_PACKAGE}';\n")
                 registry_f.write("import {{{}}} from './messages/{}';\n".format(camelcase(m.name), filename))
                 imported_enums = []
                 for enum in [field.enum for field in m.fields if field.enum != '']:
@@ -109,7 +110,7 @@ def generate_classes(dir, registry, msgs, xml):
 
 
 def generate_tsconfig(basename):
-    with open('{}/tsconfig.json'.format(basename), "w") as f:
+    with open('{}/tsconfig.json'.format(basename), "w", encoding='utf-8') as f:
         f.write(
             "{\n  \"compilerOptions\": {\n    \"target\": \"es5\",\n    \"module\": \"commonjs\","
             "\n    \"declaration\": true,\n    \"declarationMap\": true,\n    \"sourceMap\": true,"

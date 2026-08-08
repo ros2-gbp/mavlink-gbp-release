@@ -208,6 +208,18 @@
       <entry value="2" name="MAV_SYS_STATUS_SENSOR_LEAK">
         <description>0x02 Leak detection</description>
       </entry>
+      <entry value="4" name="MAV_SYS_STATUS_SENSOR_3D_GYRO3">
+        <description>0x04 3rd 3D gyro</description>
+      </entry>
+      <entry value="8" name="MAV_SYS_STATUS_SENSOR_3D_ACCEL3">
+        <description>0x08 3rd 3D accelerometer</description>
+      </entry>
+      <entry value="16" name="MAV_SYS_STATUS_SENSOR_3D_GYRO4">
+        <description>0x10 4th 3D gyro</description>
+      </entry>
+      <entry value="32" name="MAV_SYS_STATUS_SENSOR_3D_ACCEL4">
+        <description>0x20 4th 3D accelerometer</description>
+      </entry>
     </enum>
     <enum name="MAV_FRAME">
       <description>Coordinate frames used by MAVLink. Not all frames are supported by all commands, messages, or vehicles.
@@ -1045,21 +1057,6 @@
         <description>Reset all parameters to default values.</description>
       </entry>
     </enum>
-    <enum name="PREFLIGHT_STORAGE_MISSION_ACTION">
-      <description>
-        Actions for reading and writing plan information (mission, rally points, geofence) between persistent and volatile storage when using MAV_CMD_PREFLIGHT_STORAGE.
-        (Commonly missions are loaded from persistent storage (flash/EEPROM) into volatile storage (RAM) on startup and written back when they are changed.)
-      </description>
-      <entry value="0" name="MISSION_READ_PERSISTENT">
-        <description>Read current mission data from persistent storage</description>
-      </entry>
-      <entry value="1" name="MISSION_WRITE_PERSISTENT">
-        <description>Write current mission data to persistent storage</description>
-      </entry>
-      <entry value="2" name="MISSION_RESET_DEFAULT">
-        <description>Erase all mission data stored on the vehicle (both persistent and volatile storage)</description>
-      </entry>
-    </enum>
     <enum name="REBOOT_SHUTDOWN_ACTION">
       <description>Reboot/shutdown action for selected component in MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN.</description>
       <entry value="0" name="REBOOT_SHUTDOWN_ACTION_NONE">
@@ -1467,7 +1464,7 @@
         <param index="6">Empty</param>
         <param index="7">Empty</param>
       </entry>
-      <entry value="177" name="MAV_CMD_DO_JUMP" hasLocation="false" isDestination="false">
+      <entry value="177" name="MAV_CMD_DO_JUMP" hasLocation="false" isDestination="false" missionOnly="true">
         <description>Jump to the desired command in the mission list.  Repeat this action only the specified number of times</description>
         <param index="1" label="Number" minValue="0" increment="1">Sequence number</param>
         <param index="2" label="Repeat" minValue="0" increment="1">Repeat count</param>
@@ -1987,7 +1984,7 @@
       <entry value="245" name="MAV_CMD_PREFLIGHT_STORAGE" hasLocation="false" isDestination="false">
         <description>Request storage of different parameter values and logs. This command will be only accepted if in pre-flight mode.</description>
         <param index="1" label="Parameter Storage" enum="PREFLIGHT_STORAGE_PARAMETER_ACTION">Action to perform on the persistent parameter storage</param>
-        <param index="2" label="Mission Storage" enum="PREFLIGHT_STORAGE_MISSION_ACTION">Action to perform on the persistent mission storage</param>
+        <param index="2">Reserved</param>
         <param index="3" label="Logging Rate" units="Hz" minValue="-1" increment="1">Onboard logging: 0: Ignore, 1: Start default rate logging, -1: Stop logging, &gt; 1: logging rate (e.g. set to 1000 for 1000 Hz logging)</param>
         <param index="4">Reserved</param>
         <param index="5">Empty</param>
@@ -2103,7 +2100,8 @@
         <description>Inject artificial failure for testing purposes. Note that autopilots should implement an additional protection before accepting this command such as a specific param setting.</description>
         <param index="1" label="Failure unit" enum="FAILURE_UNIT">The unit which is affected by the failure.</param>
         <param index="2" label="Failure type" enum="FAILURE_TYPE">The type how the failure manifests itself.</param>
-        <param index="3" label="Instance">Instance affected by failure (0 to signal all).</param>
+        <param index="3" label="Instance" minValue="0" increment="1">Instance affected by failure (0 to signal all). Takes precedence over Instance bitmask (param4) when not NaN. Set to NaN to use Instance bitmask instead.</param>
+        <param index="4" label="Instance bitmask" minValue="0">Bitmask of instances affected by the failure (bit 0 = first instance, bit 1 = second instance, etc.). Used only when Instance (param3) is NaN.</param>
       </entry>
       <entry value="500" name="MAV_CMD_START_RX_PAIR" hasLocation="false" isDestination="false">
         <description>Starts receiver pairing.</description>
@@ -2234,10 +2232,21 @@
         <description>Tagged jump target. Can be jumped to with MAV_CMD_DO_JUMP_TAG.</description>
         <param index="1" label="Tag" minValue="0" increment="1">Tag.</param>
       </entry>
-      <entry value="601" name="MAV_CMD_DO_JUMP_TAG" hasLocation="false" isDestination="false">
+      <entry value="601" name="MAV_CMD_DO_JUMP_TAG" hasLocation="false" isDestination="false" missionOnly="true">
         <description>Jump to the matching tag in the mission list. Repeat this action for the specified number of times. A mission should contain a single matching tag for each jump. If this is not the case then a jump to a missing tag should complete the mission, and a jump where there are multiple matching tags should always select the one with the lowest mission sequence number.</description>
         <param index="1" label="Tag" minValue="0" increment="1">Target tag to jump to.</param>
         <param index="2" label="Repeat" minValue="0" increment="1">Repeat count.</param>
+      </entry>
+      <entry value="611" name="MAV_CMD_DO_SET_GLOBAL_ORIGIN" hasLocation="true" isDestination="false">
+        <description>Sets the GNSS coordinates of the vehicle local origin (0,0,0) position.
+          Vehicle should emit GPS_GLOBAL_ORIGIN irrespective of whether the origin is changed.
+          This enables transform between the local coordinate frame and the global (GNSS) coordinate frame, which may be necessary when (for example) indoor and outdoor settings are connected and the MAV should move from in- to outdoor.
+          This command supersedes SET_GPS_GLOBAL_ORIGIN.
+          Should be sent in a COMMAND_INT (Expected frame is MAV_FRAME_GLOBAL, and this should be assumed when sent in COMMAND_LONG).
+        </description>
+        <param index="5" label="Latitude">Latitude</param>
+        <param index="6" label="Longitude">Longitude</param>
+        <param index="7" label="Altitude" units="m">Altitude</param>
       </entry>
       <entry value="1000" name="MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW" hasLocation="false" isDestination="false">
         <description>Set gimbal manager pitch/yaw setpoints (low rate command). It is possible to set combinations of the values below. E.g. an angle as well as a desired angular rate can be used to get to this angle at a certain angular rate, or an angular rate only will result in continuous turning. NaN is to be used to signal unset. Note: only the gimbal manager will react to this command - it will be ignored by a gimbal device. Use GIMBAL_MANAGER_SET_PITCHYAW if you need to stream pitch/yaw setpoints at higher rate. </description>
@@ -4001,11 +4010,9 @@
         <description>Camera tracking in error state</description>
       </entry>
       <entry value="4" name="CAMERA_TRACKING_STATUS_FLAGS_MTI">
-        <wip/>
         <description>Camera Moving Target Indicators (MTI) are active</description>
       </entry>
       <entry value="8" name="CAMERA_TRACKING_STATUS_FLAGS_COASTING">
-        <wip/>
         <description>Camera tracking target is obscured and is being predicted</description>
       </entry>
     </enum>
@@ -4938,11 +4945,19 @@
       <entry value="7" name="FAILURE_UNIT_SENSOR_DISTANCE_SENSOR"/>
       <entry value="8" name="FAILURE_UNIT_SENSOR_AIRSPEED"/>
       <entry value="100" name="FAILURE_UNIT_SYSTEM_BATTERY"/>
-      <entry value="101" name="FAILURE_UNIT_SYSTEM_MOTOR"/>
+      <entry value="101" name="FAILURE_UNIT_SYSTEM_MOTOR">
+        <description>Interrupts the commanded output to the motor.</description>
+      </entry>
       <entry value="102" name="FAILURE_UNIT_SYSTEM_SERVO"/>
       <entry value="103" name="FAILURE_UNIT_SYSTEM_AVOIDANCE"/>
       <entry value="104" name="FAILURE_UNIT_SYSTEM_RC_SIGNAL"/>
       <entry value="105" name="FAILURE_UNIT_SYSTEM_MAVLINK_SIGNAL"/>
+      <entry value="106" name="FAILURE_UNIT_SYSTEM_ESC">
+        <description>Interrupts the telemetry reported by the ESC.</description>
+      </entry>
+      <entry value="107" name="FAILURE_UNIT_SYSTEM_TRAFFIC_AVOIDANCE">
+        <description>Traffic avoidance system like ADS-B or FLARM.</description>
+      </entry>
     </enum>
     <enum name="FAILURE_TYPE">
       <!-- This enum is work-in-progress and it can therefore change. It should NOT be used in stable production environments. -->
@@ -4970,6 +4985,9 @@
       </entry>
       <entry value="7" name="FAILURE_TYPE_INTERMITTENT">
         <description>Unit is sometimes working, sometimes not.</description>
+      </entry>
+      <entry value="8" name="FAILURE_TYPE_DRIFT">
+        <description>Unit is publishing plausible values but drifting away from true values.</description>
       </entry>
     </enum>
     <enum name="NAV_VTOL_LAND_OPTIONS">
@@ -6998,7 +7016,7 @@
       <field type="uint16_t" name="ignore_flags" enum="GPS_INPUT_IGNORE_FLAGS">Bitmap indicating which GPS input flags fields to ignore.  All other fields must be provided.</field>
       <field type="uint32_t" name="time_week_ms" units="ms">GPS time (from start of GPS week)</field>
       <field type="uint16_t" name="time_week">GPS week number</field>
-      <field type="uint8_t" name="fix_type">0-1: no fix, 2: 2D fix, 3: 3D fix. 4: 3D with DGPS. 5: 3D with RTK</field>
+      <field type="uint8_t" name="fix_type" enum="GPS_FIX_TYPE">GNSS fix type</field>
       <field type="int32_t" name="lat" units="degE7">Latitude (WGS84)</field>
       <field type="int32_t" name="lon" units="degE7">Longitude (WGS84)</field>
       <field type="float" name="alt" units="m">Altitude (MSL). Positive for up.</field>
@@ -7012,7 +7030,7 @@
       <field type="float" name="vert_accuracy" units="m">GPS vertical accuracy</field>
       <field type="uint8_t" name="satellites_visible">Number of satellites visible.</field>
       <extensions/>
-      <field type="uint16_t" name="yaw" units="cdeg">Yaw of vehicle relative to Earth's North, zero means not available, use 36000 for north</field>
+      <field type="uint16_t" name="yaw" units="cdeg" invalid="0">Yaw of vehicle relative to Earth's North, zero means not available, use 36000 for north</field>
     </message>
     <message id="233" name="GPS_RTCM_DATA">
       <description>RTCM message for injecting into the onboard GPS (used for DGPS)</description>

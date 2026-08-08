@@ -506,8 +506,8 @@ function mavlink_proto.dissector(buffer,pinfo,tree)
         local version = buffer(offset,1):uint()
         local protocolString = ""
     
-    	while (true)
-		do
+        while (true)
+        do
             protocolString = protocolVersions[version]
             if (protocolString ~= nil) then
                 break
@@ -536,7 +536,7 @@ function mavlink_proto.dissector(buffer,pinfo,tree)
                     end
                     return
                 end
-            end	
+            end
         end
         
         if (unknownFrameBeginOffset ~= 0) then
@@ -745,7 +745,7 @@ def generate(basename, xml):
             m.order_map[i] = m.ordered_fieldnames.index(m.fieldnames[i])
 
     print("Generating %s" % filename)
-    outf = open(filename, "w")
+    outf = open(filename, "w", encoding='utf-8')
     generate_preamble(outf)
     generate_msg_table(outf, msgs)
     generate_enum_table(outf, enums)

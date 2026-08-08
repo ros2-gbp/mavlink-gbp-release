@@ -6,6 +6,7 @@ Copyright Andrew Tridgell 2011
 Released under GNU GPL version 3 or later
 '''
 
+import hashlib
 import os
 from . import mavparse, mavtemplate
 
@@ -13,7 +14,7 @@ t = mavtemplate.MAVTemplate()
 
 def generate_version_h(directory, xml):
     '''generate version.h'''
-    f = open(os.path.join(directory, "version.h"), mode='w')
+    f = open(os.path.join(directory, "version.h"), mode='w', encoding='utf-8')
     t.write(f,'''
 /** @file
  *  @brief MAVLink comm protocol built from ${basename}.xml
@@ -34,7 +35,7 @@ def generate_version_h(directory, xml):
 
 def generate_mavlink_h(directory, xml):
     '''generate mavlink.h'''
-    f = open(os.path.join(directory, "mavlink.h"), mode='w')
+    f = open(os.path.join(directory, "mavlink.h"), mode='w', encoding='utf-8')
     t.write(f,'''
 /** @file
  *  @brief MAVLink comm protocol built from ${basename}.xml
@@ -75,7 +76,7 @@ def generate_mavlink_h(directory, xml):
 
 def generate_main_h(directory, xml):
     '''generate main header per XML file'''
-    f = open(os.path.join(directory, xml.basename + ".h"), mode='w')
+    f = open(os.path.join(directory, xml.basename + ".h"), mode='w', encoding='utf-8')
     t.write(f, '''
 /** @file
  *  @brief MAVLink comm protocol generated from ${basename}.xml
@@ -166,10 +167,12 @@ def generate_message_h(directory, m):
         m.MSG_ATTRIBUTE = 'MAVLINK_WIP\n'
     else:
         m.MSG_ATTRIBUTE = ''
-    f = open(os.path.join(directory, 'mavlink_msg_%s.h' % m.name_lower), mode='w')
+    f = open(os.path.join(directory, 'mavlink_msg_%s.h' % m.name_lower), mode='w', encoding='utf-8')
     t.write(f, '''
 #pragma once
 // MESSAGE ${name} PACKING
+
+#include <stdint.h>
 
 #define MAVLINK_MSG_ID_${name} ${id}
 
@@ -462,7 +465,7 @@ ${{ordered_fields:    ${decode_left}mavlink_msg_${name_lower}_get_${name}(msg${d
 
 def generate_testsuite_h(directory, xml):
     '''generate testsuite.h per XML file'''
-    f = open(os.path.join(directory, "testsuite.h"), mode='w')
+    f = open(os.path.join(directory, "testsuite.h"), mode='w', encoding='utf-8')
     t.write(f, '''
 /** @file
  *    @brief MAVLink comm protocol testsuite generated from ${basename}.xml
@@ -759,11 +762,18 @@ def generate_one(basename, xml):
     generate_testsuite_h(directory, xml)
 
 
+def xml_name_hash(basename):
+    '''deterministic 64-bit signed hash of a dialect name; the builtin
+    hash() is randomised per interpreter run (PYTHONHASHSEED), which
+    makes regenerated headers differ even for identical XML'''
+    digest = hashlib.sha256(basename.encode('utf-8')).digest()
+    return int.from_bytes(digest[:8], 'little', signed=True)
+
 def generate(basename, xml_list):
     '''generate complete MAVLink C implemenation'''
 
     for idx in range(len(xml_list)):
         xml = xml_list[idx]
-        xml.xml_hash = hash(xml.basename)        
+        xml.xml_hash = xml_name_hash(xml.basename)
         generate_one(basename, xml)
     copy_fixed_headers(basename, xml_list[0])

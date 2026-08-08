@@ -36,29 +36,29 @@ jobs:
               machines = [
                   ("linux", "ubuntu-latest", "auto64 auto32"),
                   ("linux-arm", "ubuntu-24.04-arm", "auto"),
+                  ("linux-riscv64", "ubuntu-latest", "riscv64"),
                   ("macos", "macos-latest", "arm64 x86_64 universal2"),
                   ("windows", "windows-latest", "auto64 auto32"),
                   ("windows-arm", "windows-11-arm", "auto"),
               ]
-              py_versions = ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+              py_versions = ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
           else:
               machines = [
                   ("linux", "ubuntu-latest", "native"),
                   ("windows", "windows-latest", "native"),
               ]
-              py_versions = ["3.8", "3.13"] # Chosing the two most likely to break in PRs
+              py_versions = ["3.9", "3.14"] # Chosing the two most likely to break in PRs
 
           matrix = {"include": []}
           for (name, runner, cibw_archs) in machines:
               for py in py_versions:
-                  if name == "windows-arm" and py == "3.8": # The windows arm runner does not support Python 3.8
-                      continue
                   matrix["include"].append({
                       "name": f"python{py}-{name}",
                       "os": runner,
                       "python_version": py,
                       "cibw_build": f"cp{py.replace('.', '')}-*",
                       "cibw_archs": cibw_archs,
+                      "is_riscv": name == "linux-riscv64"
                   })
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
@@ -74,7 +74,12 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.python_version }}
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
+    - name: Set up QEMU
+      if: matrix.is_riscv
+      uses: docker/setup-qemu-action@v4
+      with:
+        platforms: riscv64
     - name: Install mavlink definitions
       shell: bash
       run: |
@@ -84,13 +89,13 @@ jobs:
       shell: bash
       run: echo "CIBW_BUILD=cp${PYTHON_VERSION/./}-*" >> $GITHUB_ENV
     - name: Build wheels
-      uses: pypa/cibuildwheel@v3.2.1
+      uses: pypa/cibuildwheel@v3.4.1
       env:
         PYMAVLINK_FAST_INDEX: "1"
         CIBW_BUILD: ${{ matrix.cibw_build }}
         CIBW_ARCHS: ${{ matrix.cibw_archs }}
     - name: Upload wheels
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ matrix.name }}
         path: wheelhouse/*.whl
@@ -99,7 +104,7 @@ jobs:
   build-sdist:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
@@ -117,7 +122,7 @@ jobs:
     - name: Build sdist
       run: pipx run build --sdist
     - name: Upload sdist
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v7
       with:
         name: sdist
         path: dist/*.tar.gz
@@ -128,7 +133,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Download all artifacts
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v8
       with:
         path: dist
         merge-multiple: true
@@ -137,7 +142,7 @@ jobs:
       run: ls -lh dist/
 
     - name: Upload final dist artifact
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v7
       with:
         name: dist
         path: dist/*

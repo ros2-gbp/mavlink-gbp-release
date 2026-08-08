@@ -5,6 +5,7 @@ mavlink python utility functions
 Copyright Andrew Tridgell 2011-2019
 Released under GNU LGPL version 3 or later
 '''
+from __future__ import annotations
 
 import socket, math, struct, time, os, fnmatch, array, sys, errno
 import select
@@ -12,6 +13,8 @@ import copy
 import json
 import re
 import platform
+from types import ModuleType
+from typing import Any
 from pymavlink import mavexpression
 import ssl
 
@@ -19,10 +22,10 @@ import ssl
 from pymavlink.generator.mavcrc import x25crc as x25crc
 
 # adding these extra imports allows pymavlink to be used directly with pyinstaller
-# without having complex spec files. To allow for installs that don't have ardupilotmega
+# without having complex spec files. To allow for installs that don't have the "all" dialect
 # at all we avoid throwing an exception if it isn't installed
 try:
-    from pymavlink.dialects.v10 import ardupilotmega
+    from pymavlink.dialects.v10 import all
 except Exception:
     pass
 
@@ -31,11 +34,11 @@ UDP_MAX_PACKET_LEN = 65535
 
 # Store the MAVLink library for the currently-selected dialect
 # (set by set_dialect())
-mavlink = None
+mavlink: ModuleType | None = None
 
 # Store the mavlink file currently being operated on
 # (set by mavlink_connection())
-mavfile_global = None
+mavfile_global: mavfile | None = None
 
 # If the caller hasn't specified a particular native/legacy version, use this
 default_native = False
@@ -45,21 +48,21 @@ global_link_id = 0
 
 # Use a globally-set MAVLink dialect if one has been specified as an environment variable.
 if not 'MAVLINK_DIALECT' in os.environ:
-    os.environ['MAVLINK_DIALECT'] = 'ardupilotmega'
+    os.environ['MAVLINK_DIALECT'] = 'all'
 
-def mavlink10():
+def mavlink10() -> bool:
     '''return True if using MAVLink 1.0 or later'''
     return not 'MAVLINK09' in os.environ
 
-def mavlink20():
+def mavlink20() -> bool:
     '''return True if using MAVLink 2.0'''
     return 'MAVLINK20' in os.environ
 
-def evaluate_expression(expression, vars, nocondition=False):
+def evaluate_expression(expression: str, vars: dict, nocondition: bool = False) -> Any:
     '''evaluation an expression'''
     return mavexpression.evaluate_expression(expression, vars, nocondition)
 
-def evaluate_condition(condition, vars):
+def evaluate_condition(condition: str | None, vars: dict) -> Any:
     '''evaluation a conditional (boolean) statement'''
     if condition is None:
         return True
@@ -68,18 +71,18 @@ def evaluate_condition(condition, vars):
         return False
     return v
 
-def u_ord(c):
+def u_ord(c: Any) -> Any:
     return c
 
 class location(object):
     '''represent a GPS coordinate'''
-    def __init__(self, lat, lng, alt=0, heading=0):
+    def __init__(self, lat: float, lng: float, alt: float = 0, heading: float = 0) -> None:
         self.lat = lat  # in degrees
         self.lng = lng  # in degrees
         self.alt = alt  # in metres
         self.heading = heading
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "lat=%.6f,lon=%.6f,alt=%.1f" % (self.lat, self.lng, self.alt)
 
 def add_message(messages, mtype, msg):
@@ -89,7 +92,10 @@ def add_message(messages, mtype, msg):
         messages[mtype] = msg
         return
     instance_value = getattr(msg, msg._instance_field)
-    if not mtype in messages:
+    if not mtype in messages or messages[mtype]._instances is None:
+        # first instance-valued message for this type, or a previous message
+        # of this type was stored without an instance value (._instances is
+        # None), so the per-instance dict was never created
         messages[mtype] = copy.copy(msg)
         messages[mtype]._instances = {}
         messages[mtype]._instances[instance_value] = msg
@@ -101,7 +107,7 @@ def add_message(messages, mtype, msg):
     messages[mtype]._instances = prev_instances
     messages["%s[%s]" % (mtype, str(instance_value))] = copy.copy(msg)
 
-def set_dialect(dialect, with_type_annotations=None):
+def set_dialect(dialect: str, with_type_annotations: bool | None = None) -> None:
     '''set the MAVLink dialect to work with.
     For example, set_dialect("ardupilotmega")
     '''
@@ -139,14 +145,14 @@ set_dialect(os.environ['MAVLINK_DIALECT'])
 
 class mavfile_state(object):
     '''state for a particular system id'''
-    def __init__(self):
-        self.messages = { 'MAV' : self }
-        self.flightmode = "UNKNOWN"
-        self.vehicle_type = "UNKNOWN"
-        self.mav_type = mavlink.MAV_TYPE_FIXED_WING
-        self.mav_autopilot = mavlink.MAV_AUTOPILOT_GENERIC
-        self.base_mode = 0
-        self.armed = False # canonical arm state for the vehicle as a whole
+    def __init__(self) -> None:
+        self.messages: dict[str, Any] = { 'MAV' : self }
+        self.flightmode: str = "UNKNOWN"
+        self.vehicle_type: str = "UNKNOWN"
+        self.mav_type: int = mavlink.MAV_TYPE_FIXED_WING
+        self.mav_autopilot: int = mavlink.MAV_AUTOPILOT_GENERIC
+        self.base_mode: int = 0
+        self.armed: bool = False # canonical arm state for the vehicle as a whole
 
         if float(mavlink.WIRE_PROTOCOL_VERSION) >= 1:
             try:
@@ -168,8 +174,8 @@ class mavfile_state(object):
 
 class param_state(object):
     '''state for a particular system id/component id pair'''
-    def __init__(self):
-        self.params = {}
+    def __init__(self) -> None:
+        self.params: dict[str, float] = {}
 
 class mavfile(object):
     '''a generic mavlink port'''
@@ -328,9 +334,15 @@ class mavfile(object):
         '''default recv method'''
         raise RuntimeError('no recv() method supplied')
 
-    def close(self, n=None):
+    def close(self):
         '''default close method'''
         raise RuntimeError('no close() method supplied')
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
     def write(self, buf):
         '''default write method'''
@@ -529,8 +541,12 @@ class mavfile(object):
                 return None
             if type is not None and not m.get_type() in type:
                 continue
-            if not evaluate_condition(condition, self.messages):
-                continue
+            if hasattr(m, "get_srcSystem"):
+                if m.get_srcSystem() not in self.sysid_state or not evaluate_condition(condition, self.sysid_state[m.get_srcSystem()].messages):
+                    continue
+            else:
+                if not evaluate_condition(condition, self.messages):
+                    continue
             return m
 
     def check_condition(self, condition):
@@ -674,7 +690,7 @@ class mavfile(object):
             return None
         return mode_mapping_byname(mav_type)
 
-    def set_mode_apm(self, mode, custom_mode = 0, custom_sub_mode = 0):
+    def set_mode_apm(self, mode):
         '''enter arbitrary mode'''
         if isinstance(mode, str):
             mode_map = self.mode_mapping()
@@ -1064,6 +1080,9 @@ class mavudp(mavfile):
             if broadcast:
                 self.port.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
                 self.broadcast = True
+            # On Windows, be need to bind on 0.0.0.0 first, to avoid socket exceptions
+            if platform.system() == "Windows":
+                self.port.bind(('0.0.0.0', int(a[1])))
         set_close_on_exec(self.port.fileno())
         self.port.setblocking(0)
         self.last_address = None
@@ -1133,7 +1152,7 @@ class mavudp(mavfile):
 
 class mavmcast(mavfile):
     '''a UDP multicast mavlink socket'''
-    def __init__(self, device, broadcast=False, source_system=255, source_component=0, use_native=default_native):
+    def __init__(self, device, source_system=255, source_component=0, use_native=default_native):
         a = device.split(':')
         mcast_ip = "239.255.145.50"
         mcast_port = 14550
@@ -1280,7 +1299,7 @@ class mavtcp(mavfile):
             data = self.port.recv(n)
         except socket.error as e:
             if e.errno in [ errno.EAGAIN, errno.EWOULDBLOCK ]:
-                return ""
+                return b""
             if e.errno in [ errno.ECONNRESET, errno.EPIPE ]:
                 self.handle_disconnect()
             raise
@@ -1672,8 +1691,12 @@ class mavmmaplog(mavlogfile):
                 return None
             if type is not None and not m.get_type() in type:
                 continue
-            if not evaluate_condition(condition, self.messages):
-                continue
+            if hasattr(m, "get_srcSystem"):
+                if m.get_srcSystem() not in self.sysid_state or not evaluate_condition(condition, self.sysid_state[m.get_srcSystem()].messages):
+                    continue
+            else:
+                if not evaluate_condition(condition, self.messages):
+                    continue
             return m
         
     def flightmode_list(self):
@@ -1862,7 +1885,6 @@ class mavwebsocket_client(mavfile):
                  device,
                  source_system=255,
                  source_component=0,
-                 retries=6,
                  use_native=default_native):
         self.resource = "/"
         a = device.split(':')
@@ -2206,6 +2228,10 @@ def auto_detect_serial_unix(preferred_list=['*']):
     '''try to auto-detect serial ports on unix'''
     import glob
     glist = glob.glob('/dev/ttyS*') + glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*') + glob.glob('/dev/serial/by-id/*')
+    if sys.platform == 'darwin':
+        # macOS names USB serial devices /dev/cu.usbmodem* and /dev/cu.usbserial*
+        # (use cu.* rather than tty.* so opening does not block on carrier detect)
+        glist += glob.glob('/dev/cu.usbmodem*') + glob.glob('/dev/cu.usbserial*')
     ret = []
     others = []
     # try preferred ones first
@@ -2527,40 +2553,41 @@ px4_map = { "MANUAL":        (mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | mavlin
 
 
 def interpret_px4_mode(base_mode, custom_mode):
+    # Dispatch on custom_main_mode (authoritative per PX4's px4_custom_mode.h);
+    # base_mode is no longer reliable for mode identity on PX4 v1.12+ (#793).
+    del base_mode
     custom_main_mode = (custom_mode & 0xFF0000)   >> 16
     custom_sub_mode  = (custom_mode & 0xFF000000) >> 24
 
-    if base_mode & mavlink.MAV_MODE_FLAG_MANUAL_INPUT_ENABLED != 0: #manual modes
-        if custom_main_mode == PX4_CUSTOM_MAIN_MODE_MANUAL:
-            return "MANUAL"
-        elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_ACRO:
-            return "ACRO"
-        elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_RATTITUDE:
-            return "RATTITUDE"
-        elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_STABILIZED:
-            return "STABILIZED"
-        elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_ALTCTL:
-            return "ALTCTL"
-        elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_POSCTL:
-            return "POSCTL"
-    elif (base_mode & auto_mode_flags) == auto_mode_flags: #auto modes
-        if custom_main_mode & PX4_CUSTOM_MAIN_MODE_AUTO != 0:
-            if custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_MISSION:
-                return "MISSION"
-            elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF:
-                return "TAKEOFF"
-            elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_LOITER:
-                return "LOITER"
-            elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_FOLLOW_TARGET:
-                return "FOLLOWME"
-            elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_RTL:
-                return "RTL"
-            elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_LAND:
-                return "LAND"
-            elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_RTGS:
-                return "RTGS"
-            elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_OFFBOARD:
-                return "OFFBOARD"
+    if custom_main_mode == PX4_CUSTOM_MAIN_MODE_MANUAL:     
+        return "MANUAL"
+    elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_ACRO:       
+        return "ACRO"
+    elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_RATTITUDE:  
+        return "RATTITUDE"
+    elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_STABILIZED: 
+        return "STABILIZED"
+    elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_ALTCTL:     
+        return "ALTCTL"
+    elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_POSCTL:     
+        return "POSCTL"
+    elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_OFFBOARD:   
+        return "OFFBOARD"
+    elif custom_main_mode == PX4_CUSTOM_MAIN_MODE_AUTO:
+        if custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_MISSION:       
+            return "MISSION"
+        elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF:       
+            return "TAKEOFF"
+        elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_LOITER:        
+            return "LOITER"
+        elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_FOLLOW_TARGET: 
+            return "FOLLOWME"
+        elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_RTL:           
+            return "RTL"
+        elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_LAND:          
+            return "LAND"
+        elif custom_sub_mode == PX4_CUSTOM_SUB_MODE_AUTO_RTGS:          
+            return "RTGS"
     return "UNKNOWN"
 
 def mode_mapping_byname(mav_type):

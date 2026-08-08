@@ -73,6 +73,7 @@
   </xs:simpleType>
 </xs:attribute>
 <xs:attribute name="replaced_by" type="xs:string"/> <!-- used in elements: superseded, deprecated -->
+<xs:attribute name="remove_on_date" type="xs:string"/> <!-- optional in elements: deprecated -->
 
 <!-- mavlink message IDs are unsigned 24-bit values. -->
 <xs:simpleType name="mavlinkMsgId" id="mavlinkMsgId">
@@ -181,6 +182,7 @@
 <xs:simpleType name="factor">
   <xs:restriction base="xs:string">
     <xs:enumeration value="1E-2"/>        <!-- actual value = stated value / 100 -->
+    <xs:enumeration value="2E-3"/>        <!-- actual value = stated value / 500 -->
     <xs:enumeration value="360/255"/>     <!-- actual value = stated value * 360/255, as used for GPS_STATUS.satellite_azimuth -->
   </xs:restriction>
 </xs:simpleType>
@@ -197,7 +199,7 @@
 <!-- definition entry elements attributes (like the ones used on MAV_CMD for example) -->
 <xs:attribute name="hasLocation" type="xs:boolean" default="true"/>    <!-- entry has lat/lon/alt location -->
 <xs:attribute name="isDestination" type="xs:boolean" default="true"/>  <!-- entry is a destination -->
-<xs:attribute name="missionOnly" type="xs:boolean" default="true"/>  <!-- entry only makes sense in missions, not commands -->
+<xs:attribute name="missionOnly" type="xs:boolean" default="false"/>  <!-- entry only makes sense in missions, not commands -->
 
 <!-- definition of complex elements -->
 <xs:element name="param">
@@ -242,7 +244,9 @@
             <xs:element ref="description" minOccurs="0"/>
         </xs:sequence>
         <xs:attribute ref="since" use="required"/>
+        <xs:attribute ref="remove_on_date"/>
         <xs:attribute ref="replaced_by" use="required"/>
+
     </xs:complexType>
 </xs:element>
 
@@ -259,7 +263,7 @@
         <xs:attribute ref="units" />
         <xs:attribute ref="increment"/>
         <xs:attribute ref="minValue"/>
-        <xs:attribute ref="maxValue"/>        
+        <xs:attribute ref="maxValue"/>
         <xs:attribute ref="multiplier"/>
         <xs:attribute ref="default" />
         <xs:attribute ref="instance" />

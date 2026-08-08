@@ -22,6 +22,7 @@ It can also be imported and used to get information about the XML.
 from bs4 import BeautifulSoup as bs
 import re
 import os  # for walk
+import sys
 
 import argparse  # for command line parsing
 
@@ -220,7 +221,7 @@ class MAVXML:
                 matching_count += 1
             else:
                 non_matching_count += 1
-        result_string = result_string = (
+        result_string = (
             f"{'[Messages](#messages)' if matching_count + non_matching_count > 0 else 'Messages'} | {matching_count} | {non_matching_count}\n"
         )
         entity_summary += result_string
@@ -232,19 +233,19 @@ class MAVXML:
                 matching_count += 1
             else:
                 non_matching_count += 1
-        result_string = result_string = (
+        result_string = (
             f"{'[Enums](#enumerated-types)' if matching_count + non_matching_count > 0 else 'Enums'} | {matching_count} | {non_matching_count}\n"
         )
         entity_summary += result_string
 
         matching_count = 0
         non_matching_count = 0
-        for commands in self.commands.values():
-            if commands.basename == commands.basename:
+        for command in self.commands.values():
+            if command.basename == self.basename:
                 matching_count += 1
             else:
                 non_matching_count += 1
-        result_string = result_string = (
+        result_string = (
             f"{'[Commands](#mav_commands)' if matching_count + non_matching_count > 0 else 'Commands'} | {matching_count} | {non_matching_count}\n\n"
         )
         entity_summary += result_string
@@ -1423,7 +1424,7 @@ The following definitions are used for testing and dialect validation:
                 # print(f"\nFile with no includes found (ENDPOINT): {xmldialect.basename}"  )
         if len(done) == 0:
             print("\nERROR in includes tree, no base found!")
-            exit(1)
+            sys.exit(1)
 
         # 2: Update all 'not done' files for which all includes have been done.
         #    Returns True if any updates were made
@@ -1482,7 +1483,7 @@ The following definitions are used for testing and dialect validation:
             if len(done) == initial_done_length:
                 # we've made no progress
                 print("ERROR include tree can't be resolved, no base found!")
-                exit(1)
+                sys.exit(1)
             return True
 
         for i in range(MAXIMUM_INCLUDE_FILE_NESTING):

@@ -1,5 +1,5 @@
-cmake_minimum_required (VERSION 3.5)
-project (mavlink NONE)
+cmake_minimum_required(VERSION 3.10)
+project(mavlink NONE)
 
 # Note: patched version for installation as ROS 3-rd party library
 # Provides C-headers and C++11

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 '''
 mavlink python utility functions
 
@@ -74,7 +73,7 @@ def evaluate_condition(condition: str | None, vars: dict) -> Any:
 def u_ord(c: Any) -> Any:
     return c
 
-class location(object):
+class location:
     '''represent a GPS coordinate'''
     def __init__(self, lat: float, lng: float, alt: float = 0, heading: float = 0) -> None:
         self.lat = lat  # in degrees
@@ -143,7 +142,7 @@ def set_dialect(dialect: str, with_type_annotations: bool | None = None) -> None
 # Set the default dialect. This is done here as it needs to be after the function declaration
 set_dialect(os.environ['MAVLINK_DIALECT'])
 
-class mavfile_state(object):
+class mavfile_state:
     '''state for a particular system id'''
     def __init__(self) -> None:
         self.messages: dict[str, Any] = { 'MAV' : self }
@@ -172,12 +171,12 @@ class mavfile_state(object):
                 # may be using a minimal dialect
                 pass
 
-class param_state(object):
+class param_state:
     '''state for a particular system id/component id pair'''
     def __init__(self) -> None:
         self.params: dict[str, float] = {}
 
-class mavfile(object):
+class mavfile:
     '''a generic mavlink port'''
     def __init__(self, fd, address, source_system=255, source_component=0, notimestamps=False, input=True, use_native=default_native):
         global mavfile_global
@@ -1084,7 +1083,7 @@ class mavudp(mavfile):
             if platform.system() == "Windows":
                 self.port.bind(('0.0.0.0', int(a[1])))
         set_close_on_exec(self.port.fileno())
-        self.port.setblocking(0)
+        self.port.setblocking(False)
         self.last_address = None
         self.timeout = timeout
         self.clients = set()
@@ -1174,13 +1173,13 @@ class mavmcast(mavfile):
             self.port.bind((mcast_ip, mcast_port))
         mreq = struct.pack("4sl", socket.inet_aton(mcast_ip), socket.INADDR_ANY)
         self.port.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-        self.port.setblocking(0)
+        self.port.setblocking(False)
         set_close_on_exec(self.port.fileno())
 
         # now the sending socket
         self.port_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.port_out.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.port_out.setblocking(0)
+        self.port_out.setblocking(False)
         self.port_out.connect((mcast_ip, mcast_port))
         set_close_on_exec(self.port_out.fileno())
         self.myport = None
@@ -1239,6 +1238,7 @@ class mavtcp(mavfile):
                  source_system=255,
                  source_component=0,
                  retries=6,
+                 reconnect_delay=1,
                  use_native=default_native):
         a = device.split(':')
         if len(a) != 2:
@@ -1248,6 +1248,11 @@ class mavtcp(mavfile):
         self.autoreconnect = autoreconnect
 
         self.retries = retries
+        # seconds to wait between connection attempts.  A peer which is
+        # merely restarting can be listening again within milliseconds,
+        # so callers which expect that can ask for a shorter delay (and
+        # correspondingly more retries):
+        self.reconnect_delay = reconnect_delay
         self.do_connect()
 
         mavfile.__init__(self, self.port.fileno(), "tcp:" + device, source_system=source_system, source_component=source_component, use_native=use_native)
@@ -1273,8 +1278,8 @@ class mavtcp(mavfile):
                         self.port = None
                     raise e
                 print(e, "sleeping")
-                time.sleep(1)
-        self.port.setblocking(0)
+                time.sleep(self.reconnect_delay)
+        self.port.setblocking(False)
         set_close_on_exec(self.port.fileno())
         self.port.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
 
@@ -1332,6 +1337,58 @@ class mavtcp(mavfile):
             self.do_connect()
 
 
+class mavuds(mavtcp):
+    '''a Unix domain stream MAVLink socket'''
+    def __init__(self,
+                 device,
+                 autoreconnect=False,
+                 source_system=255,
+                 source_component=0,
+                 retries=6,
+                 use_native=default_native):
+        if not device:
+            raise ValueError("Unix domain socket path must be specified")
+        self.destination_addr = device
+        self.autoreconnect = autoreconnect
+        self.retries = retries
+        self.do_connect()
+
+        mavfile.__init__(self, self.port.fileno(), "uds:" + device,
+                         source_system=source_system,
+                         source_component=source_component,
+                         use_native=use_native)
+
+    def do_connect(self):
+        retries = self.retries
+        if retries <= 0:
+            retries = 1
+        while retries >= 0:
+            retries -= 1
+            self.port = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                self.port.connect(self.destination_addr)
+                break
+            except Exception as e:
+                self.port.close()
+                self.port = None
+                if retries == 0:
+                    raise e
+                print(e, "sleeping")
+                time.sleep(1)
+        self.port.setblocking(0)
+        set_close_on_exec(self.port.fileno())
+        if hasattr(self, 'fd'):
+            self.fd = self.port.fileno()
+
+    def handle_disconnect(self):
+        print("Connection reset or closed by peer on Unix domain socket")
+        self.reconnect()
+
+    def handle_eof(self):
+        print("EOF on Unix domain socket")
+        self.reconnect()
+
+
 class mavtcpin(mavfile):
     '''a TCP input mavlink socket'''
     def __init__(self, device, source_system=255, source_component=0, retries=3, use_native=default_native):
@@ -1343,7 +1400,7 @@ class mavtcpin(mavfile):
         self.listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.listen.bind(self.listen_addr)
         self.listen.listen(1)
-        self.listen.setblocking(0)
+        self.listen.setblocking(False)
         set_close_on_exec(self.listen.fileno())
         self.listen.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
         mavfile.__init__(self, self.listen.fileno(), "tcpin:" + device, source_system=source_system, source_component=source_component, use_native=use_native)
@@ -1361,7 +1418,7 @@ class mavtcpin(mavfile):
             except Exception:
                 return ''
             self.port.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1) 
-            self.port.setblocking(0) 
+            self.port.setblocking(False)
             set_close_on_exec(self.port.fileno())
             self.fd = self.port.fileno()
 
@@ -1729,8 +1786,8 @@ class mavmmaplog(mavlogfile):
 class mavchildexec(mavfile):
     '''a MAVLink child processes reader/writer'''
     def __init__(self, filename, source_system=255, source_component=0, use_native=default_native):
-        from subprocess import Popen, PIPE
         import fcntl
+        from subprocess import PIPE, Popen, TimeoutExpired
         
         self.filename = filename
         self.child = Popen(filename, shell=False, stdout=PIPE, stdin=PIPE, bufsize=0)
@@ -1745,7 +1802,18 @@ class mavchildexec(mavfile):
         mavfile.__init__(self, self.fd, filename, source_system=source_system, source_component=source_component, use_native=use_native)
 
     def close(self):
-        self.child.close()
+        from subprocess import TimeoutExpired
+
+        try:
+            self.child.stdin.close()
+            self.child.stdout.close()
+        finally:
+            self.child.terminate()
+            try:
+                self.child.wait(timeout=5)
+            except TimeoutExpired:
+                self.child.kill()
+                self.child.wait()
 
     def recv(self,n=None):
         try:
@@ -1774,7 +1842,7 @@ class mavwebsocket(mavfile):
         self.listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.listen.bind(self.listen_addr)
         self.listen.listen(1)
-        self.listen.setblocking(0)
+        self.listen.setblocking(False)
         set_close_on_exec(self.listen.fileno())
         self.listen.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
         mavfile.__init__(self, self.listen.fileno(), "wsserver:" + device, source_system=source_system, source_component=source_component, use_native=use_native)
@@ -1807,7 +1875,7 @@ class mavwebsocket(mavfile):
             except Exception:
                 return ''
             self.port.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1) 
-            self.port.setblocking(0) 
+            self.port.setblocking(False)
             set_close_on_exec(self.port.fileno())
             self.fd = self.port.fileno()
 
@@ -1937,7 +2005,7 @@ class mavwebsocket_client(mavfile):
             raise
 
         self.fd = self.sock.fileno()
-        self.sock.setblocking(1)
+        self.sock.setblocking(True)
         self.ws = WSConnection(ConnectionType.CLIENT)
         b = self.ws.send(Request(host=self.host, target=self.resource))
         self.sock.send(b)
@@ -1957,7 +2025,7 @@ class mavwebsocket_client(mavfile):
             self.ws.receive_data(data)
             for event in self.ws.events():
                 if isinstance(event, AcceptConnection):
-                    self.sock.setblocking(0)
+                    self.sock.setblocking(False)
                     return
 
     def recv(self, n=None):
@@ -2039,10 +2107,10 @@ def mavlink_connection(device, baud=115200, source_system=255, source_component=
                        planner_format=None, write=False, append=False,
                        robust_parsing=True, notimestamps=False, input=True,
                        dialect=None, autoreconnect=False, zero_time_base=False,
-                       retries=3, use_native=default_native,
+                       retries=3, reconnect_delay=1, use_native=default_native,
                        force_connected=False, progress_callback=None,
                        udp_timeout=0, **opts):
-    '''open a serial, UDP, TCP or file mavlink connection'''
+    '''open a serial, UDP, TCP, Unix domain socket or file mavlink connection'''
     global mavfile_global
 
     if force_connected:
@@ -2057,9 +2125,24 @@ def mavlink_connection(device, baud=115200, source_system=255, source_component=
                       source_system=source_system,
                       source_component=source_component,
                       retries=retries,
+                      reconnect_delay=reconnect_delay,
                       use_native=use_native)
     if device.startswith('tcpin:'):
         return mavtcpin(device[6:], source_system=source_system, source_component=source_component, retries=retries, use_native=use_native)
+    if device.startswith('uds:'):
+        return mavuds(device[4:],
+                      autoreconnect=autoreconnect,
+                      source_system=source_system,
+                      source_component=source_component,
+                      retries=retries,
+                      use_native=use_native)
+    if device.startswith('unix:'):
+        return mavuds(device[5:],
+                      autoreconnect=autoreconnect,
+                      source_system=source_system,
+                      source_component=source_component,
+                      retries=retries,
+                      use_native=use_native)
     if device.startswith('udpin:'):
         return mavudp(device[6:], input=True, source_system=source_system, source_component=source_component, use_native=use_native, timeout=udp_timeout)
     if device.startswith('udpout:'):
@@ -2134,7 +2217,7 @@ def mavlink_connection(device, baud=115200, source_system=255, source_component=
                      use_native=use_native,
                      force_connected=force_connected)
 
-class periodic_event(object):
+class periodic_event:
     '''a class for fixed frequency events'''
     def __init__(self, frequency):
         self.frequency = float(frequency)
@@ -2181,7 +2264,7 @@ def all_printable(buf):
             return False
     return True
 
-class SerialPort(object):
+class SerialPort:
     '''auto-detected serial port'''
     def __init__(self, device, description=None, hwid=None):
         self.device = device
@@ -2631,7 +2714,7 @@ def mode_string_acm(mode_number):
         return mode_mapping_acm[mode_number]
     return "Mode(%u)" % mode_number
 
-class MavlinkSerialPort(object):
+class MavlinkSerialPort:
         '''an object that looks like a serial port, but
         transmits using mavlink SERIAL_CONTROL packets'''
         def __init__(self, portname, baudrate, devnum=0, devbaud=0, timeout=3, debug=0):
@@ -2758,7 +2841,7 @@ def decode_bitmask(messagetype, field, value):
     except KeyError as e:
         raise AttributeError("Did not find specified enumeration (%s)" % enum_name)
 
-    class EnumBitInfo(object):
+    class EnumBitInfo:
         def __init__(self, offset, value, name):
             self.offset = offset
             self.value = value
@@ -2909,9 +2992,3 @@ def dump_message_verbose(f, m):
             pass
 
         f.write("    %s: %s\n" % (fieldname, value))
-
-
-if __name__ == '__main__':
-        serial_list = auto_detect_serial(preferred_list=['*FTDI*',"*Arduino_Mega_2560*", "*3D_Robotics*", "*USB_to_UART*", '*PX4*', '*FMU*'])
-        for port in serial_list:
-            print("%s" % port)

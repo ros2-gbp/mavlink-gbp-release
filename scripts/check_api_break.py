@@ -15,6 +15,7 @@ This script checks for the following changes:
 -      <field type="uint8_t" name="stream_id">The ID of the requested data stream</field>
 -    </message>
 """
+import argparse
 import json
 import os
 import subprocess
@@ -22,7 +23,6 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
-from urllib import error, request
 
 from lxml import etree
 
@@ -107,22 +107,184 @@ def collect_names(root: etree._Element) -> Tuple[Dict[NameKey, bool], Dict[NameK
         if message_id is not None:
             attrs[message_key] = {"id": message_id}
 
-        for field in msg.findall("field"):
+        # Fields before <extensions/> are re-sorted by size when a message is
+        # serialized, so their order in the XML is not wire-visible and must not
+        # be compared. Extension fields are the opposite: they are never
+        # reordered, and their serialization order is defined by the XML
+        # definition order, so position is part of the wire format for them.
+        # Record it for those fields only.
+        extension_index = None
+        for child in msg:
+            if child.tag == "extensions":
+                extension_index = 0
+                continue
+            if child.tag != "field":
+                continue
+
+            field = child
             field_name = field.get("name")
             field_is_wip = message_is_wip or field.find("wip") is not None
             field_key = FieldKey(message=message_key, field_name=field_name)
             names[field_key] = field_is_wip
+            field_attrs: Dict[str, Any] = {}
             field_type = field.get("type")
             if field_type is not None:
-                attrs[field_key] = {"type": field_type}
+                field_attrs["type"] = field_type
+            if extension_index is not None:
+                field_attrs["extension_index"] = extension_index
+                extension_index += 1
+            if field_attrs:
+                attrs[field_key] = field_attrs
 
     return names, attrs
 
 
-def get_base_commit() -> str:
-    return subprocess.check_output(
-        ["git", "merge-base", "origin/master", "HEAD"], text=True
-    ).strip()
+def _merge_base(ref: str) -> Optional[str]:
+    try:
+        output = subprocess.check_output(
+            ["git", "merge-base", ref, "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        return output or None
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def get_ci_event_base_sha() -> Optional[str]:
+    """Return the base commit SHA GitHub Actions computed for this run, if any.
+
+    For `pull_request`/`push` events this is authoritative: GitHub derives it
+    from the real PR/push relationship on its own servers, not from local
+    remotes, so it's correct even in a fork's CI with no `upstream` remote
+    and no risk of a stale local ref. Because of that, any failure to read it
+    here is a hard error rather than a silent fall-through to guessing -
+    getting the base wrong in CI is exactly what this must avoid.
+
+    Returns None for triggers with no such payload (e.g. workflow_dispatch),
+    or when not running in GitHub Actions at all, so callers fall back to the
+    best-effort local resolution.
+    """
+    event_path = os.getenv("GITHUB_EVENT_PATH")
+    if not event_path:
+        return None
+
+    event_name = os.getenv("GITHUB_EVENT_NAME")
+    if event_name not in ("pull_request", "push"):
+        return None
+
+    try:
+        with open(event_path, "r", encoding="utf-8") as event_file:
+            event = json.load(event_file)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Running in CI for a '{event_name}' event but couldn't read/parse "
+            f"GITHUB_EVENT_PATH ({event_path}): {exc}"
+        )
+
+    if event_name == "pull_request":
+        sha = event.get("pull_request", {}).get("base", {}).get("sha")
+        if not sha:
+            raise RuntimeError(
+                "Running in CI for a pull_request event but 'pull_request.base.sha' "
+                "is missing from the event payload."
+            )
+        return sha
+
+    sha = event.get("before")
+    if not sha:
+        raise RuntimeError(
+            "Running in CI for a push event but 'before' is missing from the event payload."
+        )
+    if set(sha) == {"0"}:
+        raise RuntimeError(
+            "This push has no prior commit on the branch (first push of a new branch), "
+            "so there is no base to diff against. Pass --base explicitly to check it anyway."
+        )
+    return sha
+
+
+def get_base_commit(base_override: Optional[str] = None) -> str:
+    """Determine the base commit to diff against.
+
+    Checks in order:
+    1. Explicit --base override - required to resolve; errors if it doesn't.
+    2. The GitHub Actions event payload (pull_request.base.sha / push.before) -
+       authoritative when present; errors rather than falling through, since
+       this is the path that CI correctness depends on.
+    3. Local/manual use only: a best-effort guess across common remote and
+       branch names, fetching each candidate remote first to reduce
+       staleness. Every match here is printed and flagged as unverified,
+       since none of these carry the same guarantee as (1) or (2).
+    """
+    if base_override:
+        resolved = _merge_base(base_override)
+        if resolved is None:
+            raise RuntimeError(
+                f"--base {base_override!r} does not resolve to a commit reachable from HEAD."
+            )
+        print(f"Diffing against explicit --base {base_override!r} ({resolved}).", file=sys.stderr)
+        return resolved
+
+    ci_sha = get_ci_event_base_sha()
+    if ci_sha is not None:
+        resolved = _merge_base(ci_sha)
+        if resolved is None:
+            raise RuntimeError(
+                f"Running in CI but the event's base commit {ci_sha!r} isn't reachable from "
+                "HEAD - checkout history may be too shallow (check fetch-depth)."
+            )
+        print(f"Diffing against CI event base commit {resolved}.", file=sys.stderr)
+        return resolved
+
+    env_base = os.getenv("MAVLINK_BASE_REF") or os.getenv("GITHUB_BASE_REF")
+    candidates: List[str] = []
+    if env_base:
+        candidates.extend([f"origin/{env_base}", f"upstream/{env_base}", env_base])
+
+    candidates.extend([
+        "upstream/master",
+        "origin/master",
+        "master",
+        "upstream/main",
+        "origin/main",
+        "main",
+    ])
+
+    remotes = {ref.split("/", 1)[0] for ref in candidates if "/" in ref}
+    for remote in remotes:
+        try:
+            subprocess.run(
+                ["git", "fetch", "--quiet", remote],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except (subprocess.SubprocessError, OSError):
+            pass
+
+    for ref in candidates:
+        resolved = _merge_base(ref)
+        if resolved is not None:
+            print(
+                f"Diffing against best-effort base '{ref}' ({resolved}). This was guessed, "
+                "not verified - pass --base explicitly if this looks wrong.",
+                file=sys.stderr,
+            )
+            return resolved
+
+    resolved = _merge_base("HEAD~1")
+    if resolved is not None:
+        print(
+            f"Diffing against HEAD~1 ({resolved}) as a last resort - no other base could be "
+            "determined. This is very likely NOT the right comparison; pass --base explicitly.",
+            file=sys.stderr,
+        )
+        return resolved
+
+    raise RuntimeError(
+        "Could not determine base commit. Please specify a base branch using "
+        "--base <ref> or the MAVLINK_BASE_REF environment variable."
+    )
 
 def get_changed_xml_files(base: str) -> List[str]:
     changed = subprocess.check_output(
@@ -160,38 +322,75 @@ def get_pull_request_info() -> Optional[Tuple[str, int]]:
     return None
 
 
-def post_pr_comment(body: str) -> bool:
-    """Post a comment to the pull request."""
+PR_COMMENT_ARTIFACT_DIR = "api-break-comment"
+
+
+def write_pr_comment_artifact(body: str) -> bool:
+    """Write the comment body to disk as a build artifact.
+
+    This job runs against untrusted PR content (it checks out and executes
+    the PR branch's own script/tests), and for `pull_request` runs triggered
+    from a fork, GITHUB_TOKEN is always read-only regardless of the
+    permissions granted to this workflow. So this job must never hold a
+    token, and must never try to call the GitHub API directly.
+
+    Instead it writes the comment to disk; a separate, trusted workflow
+    (triggered by `workflow_run`, which does not check out or execute any
+    PR content) picks up this artifact and posts the actual comment with a
+    token that does have write access. That workflow looks up the target
+    PR number itself from trustworthy `workflow_run` event data rather than
+    from anything written here, since this job's own code (this script and
+    its workflow file) is exactly the untrusted PR content it can't hold a
+    token against - a PR number written here could just as easily be
+    forged.
+    """
     pr_info = get_pull_request_info()
     if not pr_info:
-        print("No pull request context found, skipping PR comment.")
+        print("No pull request context found, skipping PR comment artifact.")
         return False
 
-    repo, pr_number = pr_info
-    token = os.getenv("GITHUB_TOKEN")
-    if not token:
-        print("GITHUB_TOKEN not set, skipping PR comment.")
+    _repo, pr_number = pr_info
+
+    os.makedirs(PR_COMMENT_ARTIFACT_DIR, exist_ok=True)
+    with open(os.path.join(PR_COMMENT_ARTIFACT_DIR, "comment.md"), "w", encoding="utf-8") as comment_file:
+        comment_file.write(body)
+
+    print(f"Wrote PR comment artifact for #{pr_number}.")
+    return True
+
+
+# Attributes written as a number rather than a name. Two spellings of the same
+# number describe the same bytes on the wire, so comparing them as raw strings
+# reports a break that is not one. Both notations are already in the tree:
+# storm32.xml and marsh.xml write enum values in hex, everything else decimal.
+NUMERIC_ATTRS = frozenset({"value", "id"})
+
+
+def as_number(text: Any) -> Optional[int]:
+    """Return the integer an attribute denotes, or None if it does not denote one."""
+    if text is None:
+        return None
+    literal = str(text).strip()
+    # Base 0 honours the 0x/0o/0b prefixes; base 10 then covers zero-padded
+    # decimals like "007", which base 0 rejects.
+    for base in (0, 10):
+        try:
+            return int(literal, base)
+        except ValueError:
+            continue
+    return None
+
+
+def attr_changed(attr: str, old_val: Any, new_val: Any) -> bool:
+    """Whether a wire-critical attribute really changed, not just its spelling."""
+    if old_val == new_val:
         return False
-
-    url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
-    data = json.dumps({"body": body}).encode()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "mavlink-check-api-break",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        with request.urlopen(request.Request(url, data=data, headers=headers, method="POST")):
-            print(f"Posted PR comment about message/enum removals to #{pr_number}.")
-        return True
-    except error.HTTPError as exception:
-        print(f"Failed to post PR comment (HTTP {exception.code}): {exception.reason}")
-    except error.URLError as exception:
-        print(f"Failed to post PR comment (network): {exception.reason}")
-
-    return False
+    if attr in NUMERIC_ATTRS:
+        old_num = as_number(old_val)
+        new_num = as_number(new_val)
+        if old_num is not None and new_num is not None:
+            return old_num != new_num
+    return True
 
 
 def describe_mutation(key: NameKey, old_a: Dict[str, Any], new_a: Dict[str, Any]) -> str:
@@ -200,7 +399,7 @@ def describe_mutation(key: NameKey, old_a: Dict[str, Any], new_a: Dict[str, Any]
     for attr in sorted(set(old_a) | set(new_a)):
         old_val = old_a.get(attr)
         new_val = new_a.get(attr)
-        if old_val != new_val:
+        if attr_changed(attr, old_val, new_val):
             changes.append(f"{attr}: {old_val} -> {new_val}")
     return f"{describe_key(key)} ({', '.join(changes)})"
 
@@ -222,9 +421,18 @@ def find_mutations(
         new_a = new_attrs.get(key)
         if old_a is None or new_a is None:
             continue
-        if old_a != new_a:
+        if any(
+            attr_changed(attr, old_a.get(attr), new_a.get(attr))
+            for attr in set(old_a) | set(new_a)
+        ):
             mutation_descs.append(describe_mutation(key, old_a, new_a))
     return mutation_descs
+
+
+# Identifies the bot's own comment across runs so it can be updated in place
+# instead of accumulating a new comment on every push. Must stay in sync with
+# the marker check in post_api_break_comment.yml.
+COMMENT_MARKER = "<!-- mavlink-api-break-check -->"
 
 
 def build_removal_comment(
@@ -232,7 +440,7 @@ def build_removal_comment(
     mutations_by_file: Optional[Dict[str, List[str]]] = None,
 ) -> str:
     """Format a PR comment listing removed messages/enums and attribute mutations."""
-    lines: List[str] = []
+    lines: List[str] = [COMMENT_MARKER, ""]
 
     if removed_by_file:
         lines.extend(["Detected removed MAVLink messages or enums:", ""])
@@ -255,7 +463,16 @@ def build_removal_comment(
 
 
 def main() -> None:
-    base = get_base_commit()
+    parser = argparse.ArgumentParser(description="Check for breaking changes in MAVLink XML definitions.")
+    parser.add_argument(
+        "-b",
+        "--base",
+        help="Base commit or branch to diff against (default: auto-detected)",
+        default=None,
+    )
+    args = parser.parse_args()
+
+    base = get_base_commit(args.base)
     xml_files = get_changed_xml_files(base)
     if not xml_files:
         print("No XML files changed.")
@@ -273,9 +490,14 @@ def main() -> None:
             old_content = subprocess.check_output(
                 ["git", "show", f"{base}:{xml}"], text=True
             )
-            new_content = open(xml).read()
         except subprocess.CalledProcessError:
-            continue  # new file or removed, ignore
+            continue  # new file, nothing to compare against
+
+        try:
+            new_content = open(xml).read()
+        except FileNotFoundError:
+            print(f"Skipped {xml}: removed since base.")
+            continue
 
         old_root = parse_xml(old_content)
         new_root = parse_xml(new_content)
@@ -325,7 +547,7 @@ def main() -> None:
                 for desc in descs:
                     print(f"   - {desc}")
 
-        post_pr_comment(build_removal_comment(removals_for_comment, mutations_for_comment))
+        write_pr_comment_artifact(build_removal_comment(removals_for_comment, mutations_for_comment))
 
     if breaking_by_file:
         for xml, descs in breaking_by_file.items():

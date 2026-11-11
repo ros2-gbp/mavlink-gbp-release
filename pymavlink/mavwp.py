@@ -37,6 +37,7 @@ class MissionItemProtocol(object):
             mavutil.mavlink.MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION : (0,255,0),
             mavutil.mavlink.MAV_CMD_DO_LAND_START: (255, 127, 0),
             mavutil.mavlink.MAV_CMD_DO_RETURN_PATH_START: (127, 255, 0),
+            mavutil.mavlink.MAV_CMD_DO_GO_AROUND: (255, 0, 127),
         }
 
     def count(self):
@@ -152,12 +153,10 @@ class MissionItemProtocol(object):
             if mavutil.mavlink20():
                 fn = mavutil.mavlink.MAVLink_mission_item_message
                 args.append(self.mav_mission_type())
-            elif mavutil.mavlink10():
+            else:
                 fn = mavutil.mavlink.MAVLink_mission_item_message
                 if self.mav_mission_type() != mavutil.mavlink.MAV_MISSION_TYPE_MISSION:
                     raise ValueError("Not using mavlink2")
-            else:
-                fn = mavutil.mavlink.MAVLink_waypoint_message
             w = fn(*args)
             if w.command == 0 and w.seq == 0 and self.count() == 0:
                 # special handling for Mission Planner created home wp
@@ -294,11 +293,14 @@ class MissionItemProtocol(object):
                 if self.is_location_wp(w):
                     ret.append(idx)
                 break
-            if w.command in [mavutil.mavlink.MAV_CMD_DO_LAND_START, mavutil.mavlink.MAV_CMD_DO_RETURN_PATH_START]:
+            if w.command in [mavutil.mavlink.MAV_CMD_DO_LAND_START,
+                             mavutil.mavlink.MAV_CMD_DO_RETURN_PATH_START,
+                             mavutil.mavlink.MAV_CMD_DO_GO_AROUND]:
                 # these are starting points; we should never fly to
                 # one of these.... but we want an edge *from* one of these
                 if len(ret) == 0:
-                    ret.append(idx)
+                    if w.x != 0 or w.y != 0:
+                        ret.append(idx)
                     done.add(idx)
                 idx += 1
                 continue
@@ -405,10 +407,7 @@ class MAVWPLoader(MissionItemProtocol):
             a = line.split()
             if len(a) != 13:
                 raise MAVWPError("invalid waypoint line with %u values" % len(a))
-            if mavutil.mavlink10():
-                fn = mavutil.mavlink.MAVLink_mission_item_message
-            else:
-                fn = mavutil.mavlink.MAVLink_waypoint_message
+            fn = mavutil.mavlink.MAVLink_mission_item_message
             w = fn(self.target_system, self.target_component,
                    int(a[0]),    # seq
                    int(a[1]),    # frame
@@ -442,7 +441,8 @@ class MAVWPLoader(MissionItemProtocol):
 
     def is_location_wp(self, w):
         '''see if w.command is a MAV_CMD with a latitude/longitude'''
-        if w.command == mavutil.mavlink.MAV_CMD_DO_LAND_START:
+        if w.command in [mavutil.mavlink.MAV_CMD_DO_LAND_START,
+                         mavutil.mavlink.MAV_CMD_DO_GO_AROUND]:
             # technically stores a location, but we do not navigate there!
             return False
         if w.x == 0 and w.y == 0:
@@ -611,7 +611,7 @@ class MissionItemProtocol_Rally(MissionItemProtocol):
                     0,  # param4
                     int(lat_deg * 1e7),  # x (latitude)
                     int(lng_deg * 1e7),  # y (longitude)
-                    alt * 1e3,      # z (altitude)
+                    alt,            # z (altitude, metres)
                     self.mav_mission_type()
                 )
                 points.append(w)

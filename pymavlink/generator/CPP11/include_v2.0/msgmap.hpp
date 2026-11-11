@@ -4,12 +4,13 @@
 #include <algorithm>
 #ifdef FREEBSD
 #include <sys/endian.h>
-#elif __APPLE__
+#elif defined(__APPLE__) && __APPLE__
 #include <machine/endian.h>
 #else
 #include <endian.h>
 #endif
 #include <type_traits>
+#include <stdexcept>
 
 namespace mavlink {
 
@@ -56,6 +57,19 @@ public:
 
 	template<class _T, size_t _Size>
 	void operator>> (std::array<_T, _Size> &data);
+
+    // The typed target is uint32, but occupies one byte in the payload.
+    void write_target(uint32_t target)
+    {
+        *this << uint8_t(target > UINT8_MAX ? MAVLINK_TARGET_SYSTEM_SENTINEL : target);
+    }
+
+    void read_target(uint32_t &target)
+    {
+        uint8_t payload_target;
+        *this >> payload_target;
+        mavlink_msg_get_target_system(cmsg, &payload_target, &target);
+    }
 
 private:
 	mavlink_message_t *msg;		// for serialization
@@ -216,6 +230,10 @@ template<typename _T>
 void mavlink::MsgMap::operator>> (_T &data)
 {
     assert(cmsg);
+    // Reject flags whose header layout is not understood.
+    if (cmsg->magic == MAVLINK_STX && (cmsg->incompat_flags & ~(MAVLINK_IFLAG_SIGNED | MAVLINK_IFLAG_SYSID32 | MAVLINK_IFLAG_TARGET32))) {
+        throw std::runtime_error("Unknown MAVLink incompatibility flags");
+    }
     assert(pos + sizeof(_T) <= MAVLINK_MAX_PAYLOAD_LEN);
 
     ssize_t remaining_non_zero_data = cmsg->len - pos;

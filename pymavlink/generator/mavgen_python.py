@@ -52,6 +52,13 @@ HEADER_LEN_V2 = 10
 MAVLINK_SIGNATURE_BLOCK_LEN = 13
 
 MAVLINK_IFLAG_SIGNED = 0x01
+MAVLINK_IFLAG_SYSID32 = 0x02
+MAVLINK_IFLAG_TARGET32 = 0x04
+MAVLINK_IFLAG_MASK = 0x07
+
+# SYSID32 widens the source ID; TARGET32 adds a uint32 target system.
+MAVLINK_SYSID32_HEADER_EXTRA = 3
+MAVLINK_TARGET32_HEADER_EXTRA = 4
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +139,7 @@ x25crc = _x25crc_fast if mcrf4xx is not None else _x25crc_slow
 class MAVLink_header(object):
     """MAVLink message header"""
 
-    def __init__(self, msgId: int, incompat_flags: int = 0, compat_flags: int = 0, mlen: int = 0, seq: int = 0, srcSystem: int = 0, srcComponent: int = 0) -> None:
+    def __init__(self, msgId: int, incompat_flags: int = 0, compat_flags: int = 0, mlen: int = 0, seq: int = 0, srcSystem: int = 0, srcComponent: int = 0, target_system: int = 0) -> None:
         self.mlen = mlen
         self.seq = seq
         self.srcSystem = srcSystem
@@ -140,21 +147,34 @@ class MAVLink_header(object):
         self.msgId = msgId
         self.incompat_flags = incompat_flags
         self.compat_flags = compat_flags
+        # extended target, only valid when MAVLINK_IFLAG_TARGET32 is set
+        self.target_system = target_system
 
     def pack(self, force_mavlink1: bool = False) -> bytes:
         if float(WIRE_PROTOCOL_VERSION) == 2.0 and not force_mavlink1:
-            return struct.pack(
-                "<BBBBBBBHB",
+            buf = struct.pack(
+                "<BBBBB",
                 ${protocol_marker},
                 self.mlen,
                 self.incompat_flags,
                 self.compat_flags,
                 self.seq,
-                self.srcSystem,
+            )
+            if self.incompat_flags & MAVLINK_IFLAG_SYSID32:
+                buf += struct.pack("<I", self.srcSystem)
+            else:
+                buf += struct.pack("<B", self.srcSystem)
+            buf += struct.pack(
+                "<BHB",
                 self.srcComponent,
                 self.msgId & 0xFFFF,
                 self.msgId >> 16,
             )
+            if self.incompat_flags & MAVLINK_IFLAG_TARGET32:
+                buf += struct.pack("<I", self.target_system)
+            return buf
+        if self.srcSystem > 255:
+            raise MAVError("srcSystem %u requires MAVLink2" % self.srcSystem)
         return struct.pack(
             "<BBBBBB",
             PROTOCOL_MARKER_V1,
@@ -185,6 +205,8 @@ class MAVLink_message(object):
     unpacker = struct.Struct("")
     instance_field: Optional[str] = None
     instance_offset = -1
+    target_system_fieldname: Optional[str] = None
+    target_component_fieldname: Optional[str] = None
 
     def __init__(self, msgId: int, name: str) -> None:
         self._header = MAVLink_header(msgId)
@@ -231,6 +253,20 @@ class MAVLink_message(object):
 
     def get_srcComponent(self) -> int:
         return self._header.srcComponent
+
+    def get_target_system(self) -> Optional[int]:
+        """effective target system, honoring the TARGET32 extended header.
+        Returns None for messages with no target"""
+        if self.target_system_fieldname is None:
+            return None
+        return int(getattr(self, self.target_system_fieldname))
+
+    def get_target_component(self) -> Optional[int]:
+        """target component from the payload.
+        Returns None for messages with no target component"""
+        if self.target_component_fieldname is None:
+            return None
+        return int(getattr(self, self.target_component_fieldname))
 
     def get_seq(self) -> int:
         return self._header.seq
@@ -311,23 +347,40 @@ class MAVLink_message(object):
                 plen -= 1
         self._payload = payload[:plen]
         incompat_flags = 0
+        compat_flags = 0
+        target_system = 0
         if mav.signing.sign_outgoing:
             incompat_flags |= MAVLINK_IFLAG_SIGNED
+        if float(WIRE_PROTOCOL_VERSION) == 2.0 and not force_mavlink1:
+            if mav.srcSystem > 255:
+                incompat_flags |= MAVLINK_IFLAG_SYSID32
+            if self.target_system_fieldname is not None:
+                tsys = getattr(self, self.target_system_fieldname)
+                if tsys > 255:
+                    # the target goes in the extended header; the payload
+                    # target byte was set to 255 when the payload was packed
+                    incompat_flags |= MAVLINK_IFLAG_TARGET32
+                    target_system = tsys
+        else:
+            if mav.srcSystem > 255:
+                raise MAVError("srcSystem %u requires MAVLink2" % mav.srcSystem)
+            if self.target_system_fieldname is not None and getattr(self, self.target_system_fieldname) > 255:
+                raise MAVError("target_system > 255 requires MAVLink2")
         self._header = MAVLink_header(
             self._header.msgId,
             incompat_flags=incompat_flags,
-            compat_flags=0,
+            compat_flags=compat_flags,
             mlen=len(self._payload),
             seq=mav.seq,
             srcSystem=mav.srcSystem,
             srcComponent=mav.srcComponent,
+            target_system=target_system,
         )
         self._msgbuf = bytearray(self._header.pack(force_mavlink1=force_mavlink1))
         self._msgbuf += self._payload
         crc = x25crc(self._msgbuf[1:])
-        if ${crc_extra}:
-            # we are using CRC extra
-            crc.accumulate(struct.pack("B", crc_extra))
+        # we are using CRC extra
+        crc.accumulate(struct.pack("B", crc_extra))
         self._crc = crc.crc
         self._msgbuf += struct.pack("<H", self._crc)
         if mav.signing.sign_outgoing and not force_mavlink1:
@@ -370,6 +423,40 @@ msg_name =  msg.msgname if hasattr(msg, "msgname") else msg.name"""
 ''',
         params,
     )
+
+
+# enumeration entries which have been renamed in the message
+# definitions, as (old name, new name) pairs.  Whichever of the pair
+# is missing from the definitions is emitted as an alias of the other,
+# so code written against either side of the rename keeps working.
+# The alias is a module-level constant only; the enums dict keeps the
+# name used in the definitions.
+ENUM_ENTRY_RENAMES = [
+    # https://github.com/ArduPilot/mavlink/pull/521
+    ("MAV_TYPE_VTOL_DUOROTOR", "MAV_TYPE_VTOL_TAILSITTER_DUOROTOR"),
+    ("MAV_TYPE_VTOL_QUADROTOR", "MAV_TYPE_VTOL_TAILSITTER_QUADROTOR"),
+    ("MAV_TYPE_VTOL_RESERVED2", "MAV_TYPE_VTOL_FIXEDROTOR"),
+    ("MAV_TYPE_VTOL_RESERVED3", "MAV_TYPE_VTOL_TAILSITTER"),
+    ("MAV_TYPE_VTOL_RESERVED4", "MAV_TYPE_VTOL_TILTWING"),
+]
+
+
+def generate_enum_entry_aliases(outf, enums):
+    values = {}
+    for e in enums:
+        for entry in e.entry:
+            values[entry.name] = entry.value
+    aliases = []
+    for (old, new) in ENUM_ENTRY_RENAMES:
+        if old in values and new not in values:
+            aliases.append((new, old))
+        elif new in values and old not in values:
+            aliases.append((old, new))
+    if not aliases:
+        return
+    outf.write("\n# aliases for renamed enumeration entries\n")
+    for (alias, name) in aliases:
+        outf.write("%s = %s\n" % (alias, name))
 
 
 def generate_enums(outf, enums):
@@ -527,10 +614,18 @@ def generate_classes(outf, msgs, enums):
             if field.type == "char":
                 pack_fields.append("self._{0:s}_raw".format(field.name))
             elif field.array_length == 0:
-                pack_fields.append("self.{0:s}".format(field.name))
+                if field.name == m.target_system_fieldname:
+                    # targets > 255 travel in the extended header and the
+                    # payload byte uses 255 to avoid broadcast interpretation
+                    pack_fields.append("(255 if self.{0:s} > 255 else self.{0:s})".format(field.name))
+                else:
+                    pack_fields.append("self.{0:s}".format(field.name))
             else:
                 for i in range(field.array_length):
                     pack_fields.append("self.{0:s}[{1:d}]".format(field.name, i))
+
+        target_system_fieldname_str = '"%s"' % m.target_system_fieldname if m.target_system_fieldname is not None else "None"
+        target_component_fieldname_str = '"%s"' % m.target_component_fieldname if m.target_component_fieldname is not None else "None"
 
         t.write(
             outf,
@@ -558,6 +653,8 @@ ${docstring}
     unpacker = struct.Struct("${fmtstr}")
     instance_field = ${instance_field}
     instance_offset = ${instance_offset}
+    target_system_fieldname = ${target_system_fieldname}
+    target_component_fieldname = ${target_component_fieldname}
 
     def __init__(self, ${arg_fields}):
         MAVLink_message.__init__(self, ${classname}.id, ${classname}.msgname)
@@ -592,6 +689,8 @@ setattr(${classname}, "name", mavlink_msg_deprecated_name_property())
                     "crc_extra": m.crc_extra,
                     "instance_field": instance_field,
                     "instance_offset": instance_offset,
+                    "target_system_fieldname": target_system_fieldname_str,
+                    "target_component_fieldname": target_component_fieldname_str,
                     "arg_fields": ", ".join(arg_fields),
                     "init_fields": "\n        ".join(init_fields),
                     "pack_fields": ", ".join(pack_fields),
@@ -783,9 +882,9 @@ class MAVLink(object):
         self.have_prefix_error = False
         self.robust_parsing = False
         self.protocol_marker = ${protocol_marker}
-        self.little_endian = ${little_endian}
-        self.crc_extra = ${crc_extra}
-        self.sort_fields = ${sort_fields}
+        self.little_endian = True
+        self.crc_extra = True
+        self.sort_fields = True
         self.total_packets_sent = 0
         self.total_bytes_sent = 0
         self.total_packets_received = 0
@@ -794,6 +893,8 @@ class MAVLink(object):
         self.startup_time = time.time()
         self.signing = MAVLinkSigning()
         self.mav20_unpacker = struct.Struct("<cBBBBBBHB")
+        self.mav20_sysid32_unpacker = struct.Struct("<cBBBBIBHB")
+        self.mav20_target_sysid32_unpacker = struct.Struct("<I")
         self.mav10_unpacker = struct.Struct("<cBBBBB")
         self.mav20_h3_unpacker = struct.Struct("BBB")
         self.mav_csum_unpacker = struct.Struct("<H")
@@ -883,8 +984,13 @@ class MAVLink(object):
             sbuf = self.buf[self.buf_index : 3 + self.buf_index]
             unpacked_h3: Tuple[int, int, int] = self.mav20_h3_unpacker.unpack(sbuf)
             magic, self.expected_length, incompat_flags = unpacked_h3
-            if magic == PROTOCOL_MARKER_V2 and (incompat_flags & MAVLINK_IFLAG_SIGNED):
-                self.expected_length += MAVLINK_SIGNATURE_BLOCK_LEN
+            if magic == PROTOCOL_MARKER_V2:
+                if incompat_flags & MAVLINK_IFLAG_SIGNED:
+                    self.expected_length += MAVLINK_SIGNATURE_BLOCK_LEN
+                if incompat_flags & MAVLINK_IFLAG_SYSID32:
+                    self.expected_length += MAVLINK_SYSID32_HEADER_EXTRA
+                if incompat_flags & MAVLINK_IFLAG_TARGET32:
+                    self.expected_length += MAVLINK_TARGET32_HEADER_EXTRA
             self.expected_length += header_len + 2
         if self.expected_length >= (header_len + 2) and self.buf_len() >= self.expected_length:
             mbuf = self.buf[self.buf_index : self.buf_index + self.expected_length]
@@ -892,15 +998,11 @@ class MAVLink(object):
             self.expected_length = header_len + 2
             if self.robust_parsing:
                 try:
-                    if magic == PROTOCOL_MARKER_V2 and (incompat_flags & ~MAVLINK_IFLAG_SIGNED) != 0:
-                        raise MAVError("invalid incompat_flags 0x%x 0x%x %u" % (incompat_flags, magic, self.expected_length))
                     m = self.decode(mbuf)
                 except MAVError as reason:
                     m = MAVLink_bad_data(mbuf, reason.message)
                     self.total_receive_errors += 1
             else:
-                if magic == PROTOCOL_MARKER_V2 and (incompat_flags & ~MAVLINK_IFLAG_SIGNED) != 0:
-                    raise MAVError("invalid incompat_flags 0x%x 0x%x %u" % (incompat_flags, magic, self.expected_length))
                 m = self.decode(mbuf)
             return m
         return None
@@ -942,9 +1044,6 @@ class MAVLink(object):
                 return False
             logger.info("new stream")
 
-        # set the streams timestamp so we reject timestamps that go backwards
-        self.signing.stream_timestamps[stream_key] = timestamp
-
         h = hashlib.new("sha256")
         h.update(self.signing.secret_key)
         h.update(msgbuf[:-6])
@@ -954,18 +1053,39 @@ class MAVLink(object):
             logger.info("sig mismatch")
             return False
 
+        # set the streams timestamp so we reject timestamps that go backwards
+        self.signing.stream_timestamps[stream_key] = timestamp
+
         # the timestamp we next send with is the max of the received timestamp and
         # our current timestamp
         self.signing.timestamp = max(self.signing.timestamp, timestamp)
         return True
 
-    def decode(self, msgbuf: bytearray) -> MAVLink_message:
-        """decode a buffer as a MAVLink message"""
-        # decode the header
+    def _decode_header(self, msgbuf: bytearray) -> Tuple[bytes, int, int, int, int, int, int, int, int, Optional[int]]:
+        """decode the header of a MAVLink buffer, handling the SYSID32 and
+        TARGET32 extended headers"""
+        target_system: Optional[int] = None
         if msgbuf[0] != PROTOCOL_MARKER_V1:
-            headerlen = 10
+            if len(msgbuf) < 3:
+                raise MAVError("Unable to unpack MAVLink header: buffer too short")
+            hdr_incompat_flags = msgbuf[2]
+            if (hdr_incompat_flags & ~MAVLINK_IFLAG_MASK) != 0:
+                raise MAVError("invalid incompat_flags 0x%x" % hdr_incompat_flags)
+            headerlen = HEADER_LEN_V2
+            if hdr_incompat_flags & MAVLINK_IFLAG_SYSID32:
+                headerlen += MAVLINK_SYSID32_HEADER_EXTRA
+            if hdr_incompat_flags & MAVLINK_IFLAG_TARGET32:
+                headerlen += MAVLINK_TARGET32_HEADER_EXTRA
             try:
-                header_v2: MAVLinkV2Header = self.mav20_unpacker.unpack(msgbuf[:headerlen])
+                if hdr_incompat_flags & MAVLINK_IFLAG_SYSID32:
+                    header_v2: MAVLinkV2Header = self.mav20_sysid32_unpacker.unpack(msgbuf[: HEADER_LEN_V2 + MAVLINK_SYSID32_HEADER_EXTRA])
+                else:
+                    header_v2 = self.mav20_unpacker.unpack(msgbuf[:HEADER_LEN_V2])
+                if hdr_incompat_flags & MAVLINK_IFLAG_TARGET32:
+                    target_header: Tuple[int] = self.mav20_target_sysid32_unpacker.unpack(
+                        msgbuf[headerlen - MAVLINK_TARGET32_HEADER_EXTRA : headerlen]
+                    )
+                    target_system = target_header[0]
             except struct.error as emsg:
                 raise MAVError("Unable to unpack MAVLink header: %s" % emsg)
             magic, mlen, incompat_flags, compat_flags, seq, srcSystem, srcComponent, msgIdlow, msgIdhigh = header_v2
@@ -979,6 +1099,11 @@ class MAVLink(object):
             magic, mlen, seq, srcSystem, srcComponent, msgId = header_v1
             incompat_flags = 0
             compat_flags = 0
+        return (magic, mlen, incompat_flags, compat_flags, seq, srcSystem, srcComponent, msgId, headerlen, target_system)
+
+    def decode(self, msgbuf: bytearray) -> MAVLink_message:
+        """decode a buffer as a MAVLink message"""
+        magic, mlen, incompat_flags, compat_flags, seq, srcSystem, srcComponent, msgId, headerlen, target_system = self._decode_header(msgbuf)
         mapkey = msgId
         if (incompat_flags & MAVLINK_IFLAG_SIGNED) != 0:
             signature_len = MAVLINK_SIGNATURE_BLOCK_LEN
@@ -1005,9 +1130,8 @@ class MAVLink(object):
         except struct.error as emsg:
             raise MAVError("Unable to unpack MAVLink CRC: %s" % emsg)
         crcbuf = msgbuf[1 : -(2 + signature_len)]
-        if ${crc_extra}:
-            # using CRC extra
-            crcbuf.append(crc_extra)
+        # using CRC extra
+        crcbuf.append(crc_extra)
         crc2 = x25crc(crcbuf)
         if crc != crc2.crc and not MAVLINK_IGNORE_CRC:
             raise MAVError("invalid MAVLink CRC in msgID %u 0x%04x should be 0x%04x" % (msgId, crc, crc2.crc))
@@ -1054,23 +1178,22 @@ class MAVLink(object):
 
         tlist: List[Union[bytes, float, int, Sequence[Union[bytes, float, int]]]] = list(t)
         # handle sorted fields
-        if ${sort_fields}:
-            if sum(len_map) == len(len_map):
-                # message has no arrays in it
-                for i in range(0, len(tlist)):
-                    tlist[i] = t[order_map[i]]
-            else:
-                # message has some arrays
-                tlist = []
-                for i in range(0, len(order_map)):
-                    order = order_map[i]
-                    L = len_map[order]
-                    tip = sum(len_map[:order])
-                    field = t[tip]
-                    if L == 1 or isinstance(field, bytes):
-                        tlist.append(field)
-                    else:
-                        tlist.append(list(t[tip : (tip + L)]))
+        if sum(len_map) == len(len_map):
+            # message has no arrays in it
+            for i in range(0, len(tlist)):
+                tlist[i] = t[order_map[i]]
+        else:
+            # message has some arrays
+            tlist = []
+            for i in range(0, len(order_map)):
+                order = order_map[i]
+                L = len_map[order]
+                tip = sum(len_map[:order])
+                field = t[tip]
+                if L == 1 or isinstance(field, bytes):
+                    tlist.append(field)
+                else:
+                    tlist.append(list(t[tip : (tip + L)]))
 
         # terminate any strings
         for i, elem in enumerate(tlist):
@@ -1088,9 +1211,13 @@ class MAVLink(object):
         if m._signed:
             m._link_id = msgbuf[-13]
         m._msgbuf = msgbuf
-        m._payload = msgbuf[6 : -(2 + signature_len)]
+        m._payload = msgbuf[headerlen : -(2 + signature_len)]
         m._crc = crc
-        m._header = MAVLink_header(msgId, incompat_flags, compat_flags, mlen, seq, srcSystem, srcComponent)
+        m._header = MAVLink_header(msgId, incompat_flags, compat_flags, mlen, seq, srcSystem, srcComponent, target_system or 0)
+        if target_system is not None and msgtype.target_system_fieldname is not None:
+            # overlay the extended header target onto the decoded fields so
+            # existing code reading msg.target_system keeps working
+            setattr(m, msgtype.target_system_fieldname, target_system)
         return m
 ''',
         xml,
@@ -1110,9 +1237,12 @@ def generate_methods(outf, msgs):
             if f.enum:
                 field_info += ", values:%s" % f.enum
             field_info += ")"
+            # strip trailing whitespace from every line of multi-line
+            # descriptions so the generated docstring passes flake8
+            description = "\n".join(line.rstrip() for line in f.description.strip().splitlines())
             ret += "        %-18s        : %s %s\n" % (
                 f.name,
-                f.description.strip(),
+                description,
                 field_info,
             )
         return ret
@@ -1179,10 +1309,7 @@ def generate(basename, xml):
 
     for m in msgs:
         m.fielddefaults = []
-        if xml[0].little_endian:
-            m.fmtstr = "<"
-        else:
-            m.fmtstr = ">"
+        m.fmtstr = "<"
         m.native_fmtstr = m.fmtstr
         m.instance_field = None
         for f in m.ordered_fields:
@@ -1206,6 +1333,7 @@ def generate(basename, xml):
     xml = xml[0].__dict__
     generate_preamble(outf, msgs, basename, filelist, xml)
     generate_enums(outf, enums)
+    generate_enum_entry_aliases(outf, enums)
     generate_message_ids(outf, msgs)
     generate_classes(outf, msgs, enums)
     generate_mavlink_class(outf, msgs, xml)

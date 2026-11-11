@@ -1,3 +1,26 @@
+## mavlink (kilted) - 2026.11.11-1
+
+The packages in the `mavlink` repository were released into the `kilted` distro by running `/usr/bin/bloom-release -r kilted mavlink` on `Wed, 11 Nov 2026 07:32:53 -0000`
+
+The `mavlink` package was released.
+
+Version of package(s) in repository `mavlink`:
+
+- upstream repository: https://github.com/mavlink/mavlink.git
+- release repository: https://github.com/ros2-gbp/mavlink-gbp-release.git
+- rosdistro version: `2026.9.9-1`
+- old version: `2026.9.9-1`
+- new version: `2026.11.11-1`
+
+Versions of tools used:
+
+- bloom version: `0.14.4`
+- catkin_pkg version: `1.1.1`
+- rosdep version: `0.27.0`
+- rosdistro version: `1.1.0`
+- vcstools version: `0.1.42`
+
+
 ## mavlink (jazzy) - 2026.11.11-1
 
 The packages in the `mavlink` repository were released into the `jazzy` distro by running `/usr/bin/bloom-release -r jazzy mavlink` on `Wed, 11 Nov 2026 06:44:41 -0000`

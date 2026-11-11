@@ -40,7 +40,7 @@ MAXIMUM_INCLUDE_FILE_NESTING = 5
 
 # List the supported languages. This is done globally because it's used by the GUI wrapper too
 # Right now, 'JavaScript' ~= 'JavaScript_Stable', in the future it may be made equivalent to 'JavaScript_NextGen'
-supportedLanguages = ["Ada", "C", "CS", "JavaScript", "JavaScript_Stable","JavaScript_NextGen", "TypeScript", "Python3", "Python", "Lua", "WLua", "ObjC", "Spin2", "Swift", "Java", "C++11"]
+supportedLanguages = ["Ada", "C", "CS", "JavaScript", "JavaScript_Stable","JavaScript_NextGen", "TypeScript", "Python3", "Python", "Lua", "WLua", "ObjC", "Spin2", "Swift", "Java", "C++11", "Rust"]
 
 
 def mavgen(opts, args):
@@ -247,6 +247,9 @@ def mavgen(opts, args):
     if opts.language == 'python3' or opts.language == 'python':
         from . import mavgen_python
         mavgen_python.generate(opts.output, xml)
+    elif opts.language == 'rust':
+        from . import mavgen_rust
+        mavgen_rust.generate(opts.output, xml)
     elif opts.language == 'c':
         from . import mavgen_c
         mavgen_c.generate(opts.output, xml)
@@ -311,12 +314,7 @@ def mavgen_python_dialect(dialect, wire_protocol):
     '''generate the python code on the fly for a MAVLink dialect'''
     dialects = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', 'dialects')
     mdef = os.getenv("MDEF", default=os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', '..', 'message_definitions'))
-    if wire_protocol == mavparse.PROTOCOL_0_9:
-        py = os.path.join(dialects, 'v09', dialect + '.py')
-        xml = os.path.join(dialects, 'v09', dialect + '.xml')
-        if not os.path.exists(xml):
-            xml = os.path.join(mdef, 'v0.9', dialect + '.xml')
-    elif wire_protocol == mavparse.PROTOCOL_1_0:
+    if wire_protocol == mavparse.PROTOCOL_1_0:
         py = os.path.join(dialects, 'v10', dialect + '.py')
         xml = os.path.join(dialects, 'v10', dialect + '.xml')
         if not os.path.exists(xml):

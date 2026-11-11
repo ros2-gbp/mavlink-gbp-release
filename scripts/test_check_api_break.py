@@ -172,7 +172,8 @@ class ExtensionFieldOrderTests(unittest.TestCase):
     def test_message_without_extensions_is_unaffected(self):
         _names, attrs = collect_names(parse_xml(BASE_XML))
         field = attrs[FieldKey(message=MessageKey(message_name="MY_MSG"), field_name="foo")]
-        self.assertEqual(field, {"type": "uint8_t"})
+        self.assertNotIn("extension_index", field)
+        self.assertEqual(field["type"], "uint8_t")
 
     def test_extension_field_type_change_still_detected(self):
         new_xml = EXT_XML.replace('type="uint8_t" name="id"', 'type="uint16_t" name="id"')
@@ -180,6 +181,137 @@ class ExtensionFieldOrderTests(unittest.TestCase):
             mutations_between(EXT_XML, new_xml),
             ["field EXT_MSG.id (type: uint8_t -> uint16_t)"],
         )
+
+
+# Shaped like ATTITUDE in common.xml: a uint32_t followed by several floats.
+# uint32_t and float are both 4 bytes, so the generator puts them in one size
+# class and their relative XML order survives into the payload.
+SAME_SIZE_XML = """<mavlink>
+<enums>
+</enums>
+<messages>
+<message id="30" name="SS_MSG">
+  <field type="uint32_t" name="time_boot_ms">Timestamp.</field>
+  <field type="float" name="roll">Roll.</field>
+  <field type="float" name="pitch">Pitch.</field>
+  <field type="uint8_t" name="flags">Flags.</field>
+</message>
+</messages>
+</mavlink>"""
+
+
+class SameSizeFieldOrderTests(unittest.TestCase):
+    """The generator sorts pre-extension fields by size with a STABLE sort, so
+    two fields of the same size keep their XML order in the payload. Swapping
+    them changes the byte layout and CRC_EXTRA, which every peer rejects."""
+
+    def test_swapping_two_same_size_fields_is_detected(self):
+        new_xml = SAME_SIZE_XML.replace(
+            '  <field type="float" name="roll">Roll.</field>\n'
+            '  <field type="float" name="pitch">Pitch.</field>',
+            '  <field type="float" name="pitch">Pitch.</field>\n'
+            '  <field type="float" name="roll">Roll.</field>',
+        )
+        self.assertEqual(
+            sorted(mutations_between(SAME_SIZE_XML, new_xml)),
+            [
+                "field SS_MSG.pitch (size_group_index: 2 -> 1)",
+                "field SS_MSG.roll (size_group_index: 1 -> 2)",
+            ],
+        )
+
+    def test_reorder_across_size_classes_stays_silent(self):
+        # The generator re-sorts these relative to each other regardless of XML
+        # order, so moving the uint8_t above the floats changes nothing on the
+        # wire and must not be reported.
+        new_xml = SAME_SIZE_XML.replace(
+            '  <field type="float" name="roll">Roll.</field>\n'
+            '  <field type="float" name="pitch">Pitch.</field>\n'
+            '  <field type="uint8_t" name="flags">Flags.</field>',
+            '  <field type="uint8_t" name="flags">Flags.</field>\n'
+            '  <field type="float" name="roll">Roll.</field>\n'
+            '  <field type="float" name="pitch">Pitch.</field>',
+        )
+        self.assertEqual(mutations_between(SAME_SIZE_XML, new_xml), [])
+
+    def test_size_class_is_byte_width_not_type_name(self):
+        _names, attrs = collect_names(parse_xml(SAME_SIZE_XML))
+        msg = MessageKey(message_name="SS_MSG")
+
+        def index_of(field_name):
+            return attrs[FieldKey(message=msg, field_name=field_name)]["size_group_index"]
+
+        # uint32_t and float share the 4-byte class and are numbered together.
+        self.assertEqual(index_of("time_boot_ms"), 0)
+        self.assertEqual(index_of("roll"), 1)
+        self.assertEqual(index_of("pitch"), 2)
+        # The uint8_t is in its own class, so it restarts at 0.
+        self.assertEqual(index_of("flags"), 0)
+
+    def test_arrays_group_by_element_type_not_total_size(self):
+        # mavparse sorts on type_length, the ELEMENT size, so uint8_t[16] sorts
+        # with the 1-byte fields. Grouping by total size would separate these.
+        xml = SAME_SIZE_XML.replace(
+            '  <field type="uint8_t" name="flags">Flags.</field>',
+            '  <field type="uint8_t" name="flags">Flags.</field>\n'
+            '  <field type="uint8_t[16]" name="callsign">Callsign.</field>',
+        )
+        _names, attrs = collect_names(parse_xml(xml))
+        msg = MessageKey(message_name="SS_MSG")
+        self.assertEqual(attrs[FieldKey(message=msg, field_name="flags")]["size_group_index"], 0)
+        self.assertEqual(attrs[FieldKey(message=msg, field_name="callsign")]["size_group_index"], 1)
+
+    def test_extension_fields_get_no_size_group_index(self):
+        # Extension fields are never reordered, so extension_index already pins
+        # them exactly; a size class on top would report the same move twice.
+        _names, attrs = collect_names(parse_xml(EXT_XML))
+        msg = MessageKey(message_name="EXT_MSG")
+        self.assertNotIn("size_group_index", attrs[FieldKey(message=msg, field_name="id")])
+        self.assertEqual(
+            attrs[FieldKey(message=msg, field_name="time_usec")]["size_group_index"], 0
+        )
+
+    def test_unknown_type_raises(self):
+        # A field with no known size cannot be given a position, so a reorder
+        # involving it would pass unnoticed. Fail instead of skipping it.
+        xml = SAME_SIZE_XML.replace('type="uint8_t" name="flags"', 'type="mystery_t" name="flags"')
+        with self.assertRaisesRegex(ValueError, r"SS_MSG\.flags has unknown type 'mystery_t'"):
+            collect_names(parse_xml(xml))
+
+    def test_missing_type_raises(self):
+        xml = SAME_SIZE_XML.replace('type="uint8_t" name="flags"', 'name="flags"')
+        with self.assertRaisesRegex(ValueError, r"SS_MSG\.flags has no type attribute"):
+            collect_names(parse_xml(xml))
+
+    def test_every_bad_field_is_reported_at_once(self):
+        # One CI round should be enough to see all of them.
+        xml = SAME_SIZE_XML.replace('type="uint8_t" name="flags"', 'type="mystery_t" name="flags"')
+        xml = xml.replace('type="float" name="roll"', 'name="roll"')
+        with self.assertRaises(ValueError) as ctx:
+            collect_names(parse_xml(xml))
+        self.assertEqual(
+            str(ctx.exception),
+            "Field SS_MSG.roll has no type attribute; "
+            "Field SS_MSG.flags has unknown type 'mystery_t'",
+        )
+
+    def test_unknown_extension_field_type_is_not_checked(self):
+        # Extension fields are ordered by XML position, not size, so their
+        # type is never looked up here.
+        xml = EXT_XML.replace('type="uint8_t" name="id"', 'type="mystery_t" name="id"')
+        _names, attrs = collect_names(parse_xml(xml))
+        field = attrs[FieldKey(message=MessageKey(message_name="EXT_MSG"), field_name="id")]
+        self.assertEqual(field["type"], "mystery_t")
+
+    def test_appending_a_field_does_not_shift_existing_indices(self):
+        # Adding a field at the end of its size class leaves every existing
+        # field where it was, so a pure addition stays silent here.
+        new_xml = SAME_SIZE_XML.replace(
+            '  <field type="uint8_t" name="flags">Flags.</field>',
+            '  <field type="uint8_t" name="flags">Flags.</field>\n'
+            '  <field type="uint8_t" name="extra">Extra.</field>',
+        )
+        self.assertEqual(mutations_between(SAME_SIZE_XML, new_xml), [])
 
 
 class RemovalDetectionTests(unittest.TestCase):
@@ -461,6 +593,128 @@ class MainRemovedFileTests(unittest.TestCase):
             check_api_break.main()  # must not raise
 
         self.assertIn("Skipped removed_dialect.xml: removed since base.", stdout.getvalue())
+
+
+class MainUncheckedFileTests(unittest.TestCase):
+    """A file collect_names() cannot read must fail the run without stopping
+    the check of the other changed files."""
+
+    BAD_TYPE_XML = SAME_SIZE_XML.replace('type="uint8_t" name="flags"', 'type="unit8_t" name="flags"')
+    OTHER_XML = EXT_XML.replace('name="EXT_MSG"', 'name="OTHER_MSG"')
+
+    def run_main(self, base_files, new_files):
+        """Run main() with `base_files` as the base revision and `new_files`
+        as the working tree, returning (exit code, stdout, comment body).
+        File contents may be str (written as UTF-8) or raw bytes."""
+        from unittest.mock import patch
+        import contextlib
+        import io
+        import subprocess
+        import tempfile
+
+        def fake_check_output(cmd, **kwargs):
+            if cmd[:2] == ["git", "show"]:
+                content = base_files[cmd[2].split(":", 1)[1]]
+                return content if isinstance(content, bytes) else content.encode()
+            raise subprocess.CalledProcessError(1, cmd)
+
+        comments = []
+        stdout = io.StringIO()
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, content in new_files.items():
+                if isinstance(content, str):
+                    content = content.encode()
+                with open(os.path.join(tmp, name), "wb") as f:
+                    f.write(content)
+            os.chdir(tmp)
+            try:
+                with patch("sys.argv", ["check_api_break.py"]), \
+                     patch.object(check_api_break, "get_base_commit", return_value="deadbeef"), \
+                     patch.object(check_api_break, "get_changed_xml_files", return_value=sorted(new_files)), \
+                     patch.object(check_api_break, "write_pr_comment_artifact", side_effect=comments.append), \
+                     patch("subprocess.check_output", side_effect=fake_check_output), \
+                     contextlib.redirect_stdout(stdout):
+                    try:
+                        check_api_break.main()
+                        code = 0
+                    except SystemExit as exc:
+                        code = exc.code
+            finally:
+                os.chdir(cwd)
+        return code, stdout.getvalue(), comments[0] if comments else None
+
+    def test_unreadable_base_does_not_hide_a_break_in_another_file(self):
+        code, out, comment = self.run_main(
+            base_files={"a.xml": self.BAD_TYPE_XML, "b.xml": self.OTHER_XML},
+            new_files={
+                "a.xml": self.BAD_TYPE_XML.replace("Flags.", "Flag bits."),
+                "b.xml": self.OTHER_XML.replace('  <field type="int16_t" name="xacc">X acceleration.</field>\n', ""),
+            },
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("Could not check a.xml:", out)
+        self.assertIn("base revision deadbeef: Field SS_MSG.flags has unknown type 'unit8_t'", out)
+        self.assertIn("Removed field OTHER_MSG.xacc", out)
+        self.assertIn("Could not check these files", comment)
+        self.assertIn("- `a.xml`", comment)
+
+    def test_unreadable_new_revision_is_reported_as_such(self):
+        code, out, comment = self.run_main(
+            base_files={"a.xml": SAME_SIZE_XML},
+            new_files={"a.xml": self.BAD_TYPE_XML},
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("new revision: Field SS_MSG.flags has unknown type 'unit8_t'", out)
+        self.assertIn("fix the type in the xml", out.lower())
+        self.assertNotIn("base revision", out)
+        self.assertNotIn("please confirm", comment)
+
+    def test_fixing_a_bad_base_type_is_not_told_to_fix_it(self):
+        code, out, _comment = self.run_main(
+            base_files={"a.xml": self.BAD_TYPE_XML},
+            new_files={"a.xml": SAME_SIZE_XML},
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("base revision deadbeef: Field SS_MSG.flags has unknown type 'unit8_t'", out)
+        self.assertNotIn("fix the type", out.lower())
+
+    def test_malformed_xml_does_not_hide_a_break_in_another_file(self):
+        code, out, comment = self.run_main(
+            base_files={"a.xml": BASE_XML, "b.xml": self.OTHER_XML},
+            new_files={
+                "a.xml": BASE_XML.replace("</message>", "</msg>"),
+                "b.xml": self.OTHER_XML.replace('  <field type="int16_t" name="xacc">X acceleration.</field>\n', ""),
+            },
+        )
+        self.assertEqual(code, 1)
+        # The parser's own wording varies with the libxml2 version, so only
+        # check that the new revision of a.xml is the one reported.
+        self.assertRegex(out, r"Could not check a\.xml:\n - new revision: \S")
+        self.assertNotIn("fix the type", out.lower())
+        self.assertIn("Removed field OTHER_MSG.xacc", out)
+        self.assertIn("- `a.xml`", comment)
+
+    def test_bad_utf8_is_reported_as_unreadable(self):
+        code, out, comment = self.run_main(
+            base_files={"a.xml": BASE_XML},
+            new_files={"a.xml": BASE_XML.replace(">desc<", ">d\xe9sc<").encode("latin-1")},
+        )
+        self.assertEqual(code, 1)
+        self.assertRegex(out, r"Could not check a\.xml:\n - new revision: \S")
+        self.assertIn("- `a.xml`", comment)
+
+    def test_confirm_line_comes_before_the_unchecked_files(self):
+        _code, _out, comment = self.run_main(
+            base_files={"a.xml": SAME_SIZE_XML, "b.xml": self.OTHER_XML},
+            new_files={
+                "a.xml": self.BAD_TYPE_XML,
+                "b.xml": self.OTHER_XML.replace('type="int16_t" name="xacc"', 'type="int32_t" name="xacc"'),
+            },
+        )
+        confirm = comment.index("please confirm")
+        self.assertLess(comment.index("Detected wire-breaking attribute mutations"), confirm)
+        self.assertLess(confirm, comment.index("Could not check these files"))
 
 
 class NumericAttributeTests(unittest.TestCase):

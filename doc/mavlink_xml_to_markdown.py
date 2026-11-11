@@ -917,7 +917,8 @@ class MAVEnum:
 
 
 class MAVCommandParam:
-    def __init__(self, soup, parent):
+    def __init__(self, soup, parent, index=None):
+        # soup is None for a param that is not declared in the XML (implicitly reserved)
         # name, value, description='', end_marker=False, autovalue=False, origin_file='', origin_line=0, has_location=False
 
         self.index = None
@@ -932,7 +933,8 @@ class MAVCommandParam:
         self.default = None
         self.multiplier = None
 
-        for attr, value in soup.attrs.items():
+        attrs = soup.attrs if soup else {"index": str(index), "reserved": "true"}
+        for attr, value in attrs.items():
             # We do it this way to catch all of them. New additions will throw debug
             if attr == "index":
                 self.index = int(value)
@@ -949,9 +951,7 @@ class MAVCommandParam:
             elif attr == "increment":
                 self.increment = value
             elif attr == "reserved":
-                self.reserved = (
-                    True  # TODO is it ever reserved by default, and if so make happen
-                )
+                self.reserved = value.lower() in ("true", "1")  # xs:boolean
             elif attr == "default":
                 self.default = (
                     value  # TODO is it ever default by default, and if so make happen?
@@ -963,9 +963,18 @@ class MAVCommandParam:
                     f"Debug: MAVCommandParam: Unexpected attribute: {attr}, Value: {value}"
                 )
 
-        if soup.text:
+        if soup and soup.text:
             self.description = soup.text
-        if self.description:
+        # Reserved if undeclared, tagged reserved, blank, or the text starts with
+        # "Reserved", "Empty" etc. Any default or other text in the XML is ignored.
+        if (
+            self.reserved
+            or not (self.description or "").strip()
+            or RESERVED_PARAM_TEXT.match(self.description)
+        ):
+            self.reserved = True
+            self.description = reservedParamDescription(self.index)
+        else:
             self.description = tidyDescription(self.description, "table")
         # no deprecated or wip supported
         # self.autovalue = autovalue  # True if value was *not* specified in XML
@@ -988,6 +997,17 @@ class MAVCommandParam:
             parent.param_fieldnames.add("multiplier")
 
 
+# MAV_CMD usage contexts (XML attribute -> label, VitePress badge type, tooltip).
+# Order is the display order. Badges use the default-theme `VPBadge` classes, so they
+# are static HTML: no Vue component to hydrate, and readable even if CSS/JS is late.
+COMMAND_USAGE = {
+    "mission": ("Mission", "tip", "Can be used as a mission item"),
+    "command": ("Command", "info", "Can be sent as a command (COMMAND_INT/COMMAND_LONG)"),
+    "fence": ("Fence", "warning", "Can be used in a geofence plan"),
+    "rally": ("Rally", "warning", "Can be used in a rally point plan"),
+}
+
+
 class MAVCommand:
     def __init__(self, soup, basename):
         # name, value, description='', end_marker=False, autovalue=False, origin_file='', origin_line=0, has_location=False
@@ -998,9 +1018,26 @@ class MAVCommand:
                 "value") else "TODO MISSING VALUE"
         )
         self.basename = basename
+        self.has_location = soup.get("hasLocation", "false").lower() == "true"
+        self.usage = [
+            key for key in COMMAND_USAGE
+            if soup.get(key, "false").lower() == "true"
+        ]
         self.description = soup.description.text if soup.description else None
         if self.description:
             self.description = tidyDescription(self.description)
+        if self.has_location:
+            location_note = (
+                "::: tip\n"
+                "Use [COMMAND_INT](common.md#COMMAND_INT)/[MISSION_ITEM_INT](common.md#MISSION_ITEM_INT) by preference — "
+                "these require latitude/longitude values scaled by `1E7` (for greater precision).\n"
+                ":::\n"
+            )
+            self.description = (
+                f"{self.description}\n\n{location_note}"
+                if self.description
+                else location_note
+            )
         self.deprecated = soup.find("deprecated", recursive=False)
         self.deprecated = MAVDeprecated(
             self.deprecated) if self.deprecated else None
@@ -1017,8 +1054,22 @@ class MAVCommand:
         self.params = []
         params = soup.find_all("param")
         for param in params:
-            # TODO: Decide if we want to add entries for non-existing param values
             self.params.append(MAVCommandParam(param, self))
+        # Params that are not declared in the XML are reserved
+        declared = {param.index for param in self.params}
+        for index in range(1, 8):
+            if index not in declared:
+                self.params.append(MAVCommandParam(None, self, index))
+        self.params.sort(key=lambda param: param.index)
+
+    def getUsageBadges(self):
+        """Return static-HTML badges (leading space included) for the contexts
+        in which this command can be used, or "" if none are declared."""
+        badges = ""
+        for key in self.usage:
+            label, badge_type, tooltip = COMMAND_USAGE[key]
+            badges += f' <span class="VPBadge {badge_type}" title="{tooltip}">{label}</span>'
+        return badges
 
     def getMarkdown(self, currentDialect):
         """Return markdown for a command (entry)"""
@@ -1049,6 +1100,7 @@ class MAVCommand:
             string += " [SUP]"
         elif self.wip:
             string += " [WIP]"
+        string += self.getUsageBadges()
         string += " {#" + self.name + "}\n\n"
 
         if self.deprecated:
@@ -1126,6 +1178,23 @@ class MAVCommand:
         string += "\n\n"
 
         return string
+
+
+# Param text that marks a MAV_CMD param as reserved/unused (e.g. "Empty.", "Reserved (set to 0)")
+RESERVED_PARAM_TEXT = re.compile(
+    r"\s*(reserved|empty|unused|not used|n/a|spare)(?=$|[\s.,:;(])", re.IGNORECASE
+)
+
+
+def reservedParamDescription(index):
+    """
+    Description for a reserved MAV_CMD param.
+    """
+    note = " Note: Implementations that currently accept 0 as the sentinel values are planning to migrate (check their documentation on the state)."
+    if index in (5, 6):
+        # param5/param6 are int32 in COMMAND_INT/MISSION_ITEM_INT, which can't carry NaN
+        return "Reserved. Default: INT32_MAX (COMMAND_INT/MISSION_ITEM_INT) or NaN (COMMAND_LONG)." + note
+    return "Reserved. Default: NaN." + note
 
 
 def tidyDescription(desc_string, type="markdown"):
